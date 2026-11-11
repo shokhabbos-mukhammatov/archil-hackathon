@@ -15,7 +15,7 @@ __pycache__/
 *.pyc
 
 # Logs from fake-mode runs (stand-ins, no real results)
-scoped-runner/runs/fake/
+runs/fake/
 
 # Local tooling and OS files
 .claude/settings.local.json
