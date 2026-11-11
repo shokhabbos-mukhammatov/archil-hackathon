@@ -4,14 +4,32 @@
     {
       "name": "dashboard-fake",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["scoped-runner/server.mjs", "--fake", "--port", "4319"],
+      "runtimeArgs": ["server.mjs", "--fake", "--port", "4319"],
       "port": 4319
     },
     {
       "name": "dashboard",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["scoped-runner/server.mjs", "--port", "4317"],
+      "runtimeArgs": ["server.mjs", "--port", "4317"],
       "port": 4317
+    },
+    {
+      "name": "ui",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["ui/node_modules/vite/bin/vite.js", "ui"],
+      "port": 5173
+    },
+    {
+      "name": "ui-fake-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.mjs", "--fake", "--port", "4321"],
+      "port": 4321
+    },
+    {
+      "name": "ui-fake",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["ui/node_modules/vite/bin/vite.js", "ui", "--mode", "fake"],
+      "port": 5174
     }
   ]
 }

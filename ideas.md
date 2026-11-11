@@ -115,7 +115,7 @@ The script is `premise-check/archil-check.mjs`. It created eight throwaway disks
 
 ### The end-to-end build (10 November 2026)
 
-`scoped-runner` is now a complete project: a local web dashboard (`npm start`) and a command-line tool around the same session code. All results below are from the hackathon account in `aws-us-west-2`. The README and `DEMO.md` in that folder carry the details.
+Scoped Runner is now a complete project at the repository root: a local web dashboard (`npm start`) and a command-line tool around the same session code. All results below are from the hackathon account in `aws-us-west-2`. The README and `DEMO.md` in that folder carry the details.
 
 - **What was added.** Each run gets its own three disks and a fresh canary secret, and deletes them at the end. Several runs can go at once on one host. Secret values are scrubbed from everything a call returns, at the one point where output leaves Archil, which closes the "test output goes back to the model" gap. An access matrix measures what each class can actually reach. A fake mode with stand-ins lets the dashboard be tried with no keys.
 - **Live agent (run `7pt494`, Opus 5.5).** 10 calls in 36 seconds, all five independent checks passed, no call held the secrets with network access or a writable folder. Claude rejected an unrelated first search result and searched again.
@@ -140,7 +140,7 @@ The script is `premise-check/archil-check.mjs`. It created eight throwaway disks
 
 ### Still open
 
-- **The first live run passed.** The build is in the `scoped-runner` folder. You ran `demo.mjs` on the hackathon account (run `qqv114`), and under the limits both real commands worked:
+- **The first live run passed.** The build is at the repository root. You ran `demo.mjs` on the hackathon account (run `qqv114`), and under the limits both real commands worked:
 
   | Step | Class | Secrets | Workspace write | Outside network | Command |
   |---|---|---|---|---|---|
@@ -149,7 +149,7 @@ The script is `premise-check/archil-check.mjs`. It created eight throwaway disks
 
   With no limits, both calls could read the secrets, write the workspace and reach the outside network. So the second half of the premise held for this sample: real commands still complete when access is split per call. It is one small project with one dependency, and the steps were scripted, not chosen by a model.
 - **The Keenable step passed live.** In your second run (`7hkmmu`), the web search call mounted only the web-results disk, reached Keenable (HTTP 200, 3 results saved) while another outside host was blocked, and saw no secrets and no workspace. A later plain command read the saved results read-only. All four steps worked under the limits, and no call that could read the secrets reached an outside host. It uses Keenable's keyless public endpoint (1,000 requests an hour per IP address), so no key enters the call.
-- **Whether the real agent works live.** `scoped-runner/agent.mjs` is written: Claude chooses the steps through three tools (bash, web search, write file), and each tool call becomes one Archil call with only its class's access. A fifth class, edit, lets the file-writing tool change the workspace with no network and no secrets. After the agent stops, the script checks the result itself. The 13 policy tests and the agent's self-test (with stand-ins for the model and for Archil) pass.
+- **Whether the real agent works live.** `agent.mjs` is written: Claude chooses the steps through three tools (bash, web search, write file), and each tool call becomes one Archil call with only its class's access. A fifth class, edit, lets the file-writing tool change the workspace with no network and no secrets. After the agent stops, the script checks the result itself. The 13 policy tests and the agent's self-test (with stand-ins for the model and for Archil) pass.
   - **Rehearsal on Archil passed (run `7cwyr4`).** With the steps scripted in place of a model, the same loop made seven real Archil calls across five classes: one search, two plain reads, two file writes, one install, one test run. The script's own check afterwards found the whole test suite passing and the new function returning the required text. No call was granted the secrets together with network access or a writable folder. This proves everything except the model's own choices.
   - **The real model run passed (run `5sb7jh`, model `claude-opus-5-5`).** Claude chose the steps itself and finished in five calls and 33 seconds: one plain read, two file writes, one install, one test run. The script's own check afterwards found the whole test suite passing and the new function returning the required text. No call was granted the secrets together with network access or a writable folder. The model's first command chained several reads with `;`, so the rules gave it the least-privileged class, which was enough for reading.
   - **The search class was not used in that first run.** The model said it already knew how the `ms` package works and did not search.
