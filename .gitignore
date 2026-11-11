@@ -22,3 +22,6 @@ runs/fake/
 .DS_Store
 Thumbs.db
 *.log
+
+# The judging script is kept locally, not in the repository
+/DEMO.md
