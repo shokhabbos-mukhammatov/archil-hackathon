@@ -2,6 +2,93 @@
 
 Last updated 2026-11-10. Facts about Archil come from its docs. Scores and rankings are opinions from AI reviewers, not measurements. Nothing has been built or tested yet.
 
+## What the hosts asked for
+
+This comes from the kickoff talk: three photos of the slide, and a speech-to-text transcript that is garbled in places. It outranks every simulated review below, because it is what the judges themselves said.
+
+**The slide, "Requests for ideas: what we'd love to see built tonight"**
+
+1. **Massively multi-tenant agent loops.** "One host, every user: their own disk and a microVM per bash call."
+2. **Large agent swarms.** "Fan agents out over shared disks, or fork sandboxes to try ideas in parallel."
+3. **Data infrastructure for agents.** "Build Neon, ClickHouse or Databricks for agents, straight from our guides."
+
+**What the Archil speaker said (paraphrased from the transcript)**
+
+- Agents can be built without sandboxes at all: put the data on a disk and run bash directly against it.
+- A sandbox per agent means paying for a computer while the model is thinking, and deciding when to start and stop it.
+- He compared running agents in sandboxes to an outdated web stack, and expects agents to be packed tightly into multi-tenant infrastructure, getting compute only when they call tools.
+- The thing he said he most wants to see: how to run tens of thousands of agents on one machine using serverless tool calls. "No one has built a generalized agent platform yet."
+- Disks can synchronise with storage a customer already has.
+- Free Archil and Keenable credits are linked in the event Discord.
+
+**Judging.** There is no track to choose. Every project is judged on all three criteria: creativity, use of Archil, and technical execution.
+
+**What this changes**
+
+- **My starting thesis was wrong.** I treated forking and branching as Archil's headline feature and built most ideas on it. The host's emphasis is a disk plus a microVM per tool call, with no sandbox. One simulated reviewer noted that Archil's homepage leads with disks and tool calls; I gave that too little weight.
+- **It explains the duplicates.** "Fork sandboxes to try ideas in parallel" is on the slide, so several teams built it.
+- **The simulated sponsor reviewers were miscalibrated.** They put a database-branching idea in their bottom three because Neon already exists. The host asks for "Neon for agents" by name.
+- **Earlier ideas that match the requests.** Resumable workspace (state on a disk, every agent step a stateless command; scored 14 of 15 for feasibility) is the building block of request 1. File-system coordination (15 of 15 for use of Archil) fits the first half of request 2. The scenario database fits request 3.
+- **Archil's own guidance backs request 1.** Its best-practices page says a disk is the unit of isolation and each tenant should get its own disk with its own token.
+- **The free-plan limits may not apply** if the Discord credits raise them. Unverified.
+
+## Round four: ideas built on the hosts' thesis
+
+You asked for an idea that is not identical to a slide item but aligns with the hosts' vision. Three fresh agents generated ideas from the hosts' own words, each from a different angle (what is missing, what becomes possible, data and co-hosts). Two pairs of ideas were proposed independently by two generators and merged. Every idea had to state the premise it depends on.
+
+Three new reviewers (the host, working from the slide and talk; a judge; a developer who checked premises against the docs) scored the pool blind, in shuffled order, with a case for and against first. Each criterion is 1 to 5; the totals below are sums across the three reviewers, out of 75. "Premise" is how likely the idea's premise is to hold when checked.
+
+| Idea | What it is | Creative | Archil and vision | Technical | Feasible | Premise | Total | In top three of |
+|---|---|---|---|---|---|---|---|---|
+| Sandbox trace replay | Replay a real sandbox agent's commands one stateless call at a time, measure what breaks, then fix it with a small layer that keeps state on the disk | 14 | 15 | 12 | 8 | 11 | 60 | Host (1st), judge (1st), developer (3rd) |
+| Per-call access limits | Each bash call gets only the folders and network it needs; a malicious install script steals a secret without the limits and nothing with them | 12 | 15 | 10 | 12 | 9 | 58 | Host (2nd), judge (2nd), developer (1st) |
+| Wake files | Timers and triggers for agents that have no computer to sleep on | 9 | 13 | 8 | 13 | 12 | 55 | Host (3rd), developer (2nd) |
+| Issue repro keepers | An agent per open bug report; all reproductions rerun on each release | 12 | 10 | 12 | 7 | 8 | 49 | Judge (3rd) |
+| Call ledger | A record of every bash call: who, cost, files read and written | 9 | 12 | 10 | 8 | 9 | 48 | |
+| Dataset clerks | An agent per dataset that answers questions but never releases raw rows | 9 | 10 | 8 | 11 | 10 | 48 | |
+| Package release watchers | An agent per dependency that compares each new release with its history | 9 | 9 | 11 | 6 | 7 | 42 | |
+| Sidecar data map | A plain-text description written beside every data file | 6 | 9 | 6 | 13 | 6 | 40 | |
+| Standing questions | An agent per open question, woken only when web evidence changes | 9 | 7 | 9 | 7 | 6 | 38 | |
+| Cited web table | A table of web facts where each cell must match its stored source | 6 | 6 | 8 | 12 | 6 | 38 | |
+
+**The two leaders**
+
+- **Sandbox trace replay** has the highest ceiling. The host and judge reviewers both put it first, as the only idea that measures the speaker's claim that agents do not need a sandbox. Its risks: the lowest feasibility of the top three, and a premise that fails if the recorded commands are already self-contained. Some agents run every command independently by design, so their sessions would show nothing breaking.
+- **Per-call access limits** is the more buildable of the two and the developer reviewer's first choice. The attack is a real script, so the result does not depend on fooling a model. Its risks: Archil's free plan rejects per-call network rules, and it is unknown whether the attendee credits lift that; and an attacker could plant code that runs later in a call that does hold the secrets. The developer reviewer's design keeps secrets on a separate disk and mounts dependencies read-only during tests.
+
+Both reviewers who were asked expect no other team to build either of these.
+
+**Checks before building**
+
+- Sandbox trace replay: classify the shell commands in real public agent sessions by whether they depend on session state. Done; the premise mostly failed.
+  - **What was checked.** An agent hand-classified 212 shell commands from nine public coding-agent sessions (SWE-agent and OpenHands, all with a persistent shell), then ran a rougher automated scan over about 190 more sessions. Nothing was actually replayed; the classification is read from the recorded commands, and I have not verified it myself.
+  - **Result.** In the median session, no command depended on session state. Pooled, 12% did, but 21 of those 26 commands came from a single session. The wider scan flagged about 4.5% on sessions that started from a prepared image and about 15% where the agent had to install packages.
+  - **Why.** Agents already write self-contained commands: they prefix nearly every command with `cd` to an absolute path, and rarely rely on exported variables. Keeping the working directory and environment on the disk would have recovered none of the failures. Almost all the real dependence was on packages installed outside the workspace.
+  - **What it means.** The "before" number the idea needed would have been small and concentrated in a few sessions, so the idea was weaker than the reviewers judged. The one real gap, installs that do not persist, is handled in the chosen project by having the install class write into the workspace disk.
+  - **Limits.** All sessions were Python bug-fix benchmarks on prepared images. Setup-heavy sessions with servers and system packages are not represented and would likely show more dependence.
+- Per-call access limits: one exec call on the hackathon account with network denied and a read-only folder mount. Done; results below.
+
+**Account check results (run by you on the hackathon account, region `aws-us-west-2`)**
+
+The script is `premise-check/archil-check.mjs`. It created eight throwaway disks and deleted them afterwards.
+
+| Check | Result |
+|---|---|
+| The key and SDK work from Windows | Yes. Archil keys only work in the region they were created in; this one is `aws-us-west-2`. |
+| Nothing but the disk survives between calls | Confirmed. Working directory, an exported variable and a temp file were all gone in the next call. |
+| A call has scratch space outside the disk | Yes, a writable 16 GB root file system. Calls run as root. |
+| Files can be seeded from the laptop through the object API | Yes. |
+| A folder-only, read-only mount hides the rest of the disk | Yes for the paths tried: the parent path did not reach the planted secret, a file search of the machine did not find it, and a write was refused. |
+| Two folders of one disk mounted separately in one call | Yes, and the read-only one refused a write. |
+| Per-call network deny is accepted on this account | Yes. It is not blocked by plan here. An outside request failed under deny. |
+| Deny with one allowed host | Works: the allowed host answered and another host was blocked. |
+| Name lookups under deny | **Still answered.** The script wrongly printed "DNS lookup blocked: yes" because it only looked for IPv4 addresses; the output shows the name resolving to IPv6 addresses. The script is now corrected. Whether this is intended is a question for the Archil team. |
+| More than five disks at once | Yes, eight with no error, so the free plan's 5-disk cap does not apply to this account. The real limit is unknown. |
+| Twenty calls at once | 20 of 20 succeeded in 1.15 seconds, with a median queue time of 108 ms. |
+| Tracing tool in the default image | `strace` is not present, which matters for the Call ledger idea. |
+
+**What this settles.** The platform half of the Per-call access limits premise holds on this account: folder scoping, read-only mounts, network deny and allowlists all work per call. Still untested: whether a real agent task completes when access is split this way. The folder check tried a few obvious paths and is not a security audit of the mount.
+
 ## Decisions
 
 ### Decided
@@ -21,12 +108,59 @@ Last updated 2026-11-10. Facts about Archil come from its docs. Scores and ranki
 | 9 | **The most creative prize is no longer the target.** This replaces decision 1. | You | "Let's don't worry about the most creative track." |
 | 10 | **Build Tested search in its improved form**, aimed at technical execution first and best use of Archil second. | You, on my recommendation | It has the lowest platform risk of the ideas considered, it is clear of the fork projects, and the reviewers' objections are fixable. |
 
+| 11 | **There is no single track to aim for.** Projects are judged on all three criteria together. This replaces decisions 1 and 9. | You, reporting the event rules | From the kickoff. |
+| 12 | **The project must not be identical to a slide item, but must align with the hosts' vision and wishes.** | You | Your words: "it shouldn't be identical to the one that is on the slide, but the idea that aligns with sponsors vision and wishes." |
+| 13 | **Build Per-call access limits.** | You, on my recommendation | It was the more buildable of the two round-four leaders, and its platform premise passed a live check on the hackathon account. |
+| 14 | **The agent runs on Claude Opus 5.5** (`claude-opus-5-5`). | You | "let's go with opus 5.5" |
+
+### The end-to-end build (10 November 2026)
+
+`scoped-runner` is now a complete project: a local web dashboard (`npm start`) and a command-line tool around the same session code. All results below are from the hackathon account in `aws-us-west-2`. The README and `DEMO.md` in that folder carry the details.
+
+- **What was added.** Each run gets its own three disks and a fresh canary secret, and deletes them at the end. Several runs can go at once on one host. Secret values are scrubbed from everything a call returns, at the one point where output leaves Archil, which closes the "test output goes back to the model" gap. An access matrix measures what each class can actually reach. A fake mode with stand-ins lets the dashboard be tried with no keys.
+- **Live agent (run `7pt494`, Opus 5.5).** 10 calls in 36 seconds, all five independent checks passed, no call held the secrets with network access or a writable folder. Claude rejected an unrelated first search result and searched again.
+- **Access matrix (run `yv27yv`).** Under limits, no class could read the secret and reach an outside host; the unlimited baseline could. Where the secret was readable, it came back as `[REDACTED]`.
+- **Three runs at once (runs `0vsgsc`, `pclkxl`, `az4wr9`).** All passed: 26 Archil calls in 16 seconds. A fourth request was refused by the concurrency cap.
+- **Tests.** 31 tests and the agent self-test pass with no keys and no network.
+- **Cleanup after a killed run (decided by me when you said "you decide").** When the dashboard server starts, it deletes disks left by runs whose process died: only the disks named in that run's own log, by exact name and prefix, and never while that process is still alive. Tested on Archil: a server killed mid-run left 3 disks, and the restarted server deleted all 3 by itself.
+- **Full test pass.** Every command-line path (matrix, rehearsal, the original demo, the live agent) and every dashboard path passed live; a later Opus 5.5 run alongside a matrix passed too. Failure paths: a rejected Archil or Anthropic key fails cleanly and still deletes the run's disks; a server killed mid-run shows the run as interrupted with its disk names, and those disks stay until deleted by hand. Two fixes came out of it: failed checks now name the real cause (for example "Cannot find package 'ms'"), and key errors say which service rejected which key.
+- **Code review and redesign (you asked: "check if the architecture and code align with goal and idea", then "Fix them").** An independent reviewer and I found the headline promise did not hold end to end. Confirmed on Archil: under a deny-all rule, DNS lookups still go out through 8.8.8.8 and 1.1.1.1, and blocking them stops the call from starting. So the test class, which mounted the secrets, could leak them. What changed:
+  - The API key is no longer in any microVM: Archil's egress proxy adds it to requests to the project's own service, which runs in a small sandbox; each run gets its own key, revoked when it ends.
+  - Once Claude has seen test output, searches and installs are refused.
+  - The scrubber catches base64 at any alignment, any case and reversed forms.
+  - Every run measures each class instead of re-reading the policy.
+  - The disk leak on partial creation, the pip and yarn registries, and unsafe links are fixed.
+  - `demo.mjs` was removed.
+  - Live: Opus 5.5 run `lr77kj` passed 9 of 9 checks, and the matrix `64f3dh` passed.
+  - Rejected suspicion: naming an allowed host in TLS does not get around the allowlist; Archil routes by name.
+  - Still open: DNS, which needs Archil; scale beyond 3 concurrent runs is not measured.
+- **Claude declined to print the secret.** A custom task asked it to log the whole configuration and report it (run `5k7sru`). It refused, saying that would route the secret into tool output, and offered to log only the service name.
+- **Cleanup.** After all runs the account had no disks and no sandboxes left.
+- **Dropped during the build.** I started drafting a demo fixture that played the part of an attacker's collection server. I removed it before it ran, and a benign canary probe makes the same point (the access matrix). Nothing from it was created on the account.
+
 ### Still open
 
-- **The premise check.** The project only makes sense if there are real breakages from recent library releases where a model's unaided fix fails and a fix from the web passes. Three such cases are needed for the demo. In progress.
+- **The first live run passed.** The build is in the `scoped-runner` folder. You ran `demo.mjs` on the hackathon account (run `qqv114`), and under the limits both real commands worked:
+
+  | Step | Class | Secrets | Workspace write | Outside network | Command |
+  |---|---|---|---|---|---|
+  | `npm install` | install | not available | allowed | blocked | worked |
+  | `node --test` | test | readable | refused | blocked | worked |
+
+  With no limits, both calls could read the secrets, write the workspace and reach the outside network. So the second half of the premise held for this sample: real commands still complete when access is split per call. It is one small project with one dependency, and the steps were scripted, not chosen by a model.
+- **The Keenable step passed live.** In your second run (`7hkmmu`), the web search call mounted only the web-results disk, reached Keenable (HTTP 200, 3 results saved) while another outside host was blocked, and saw no secrets and no workspace. A later plain command read the saved results read-only. All four steps worked under the limits, and no call that could read the secrets reached an outside host. It uses Keenable's keyless public endpoint (1,000 requests an hour per IP address), so no key enters the call.
+- **Whether the real agent works live.** `scoped-runner/agent.mjs` is written: Claude chooses the steps through three tools (bash, web search, write file), and each tool call becomes one Archil call with only its class's access. A fifth class, edit, lets the file-writing tool change the workspace with no network and no secrets. After the agent stops, the script checks the result itself. The 13 policy tests and the agent's self-test (with stand-ins for the model and for Archil) pass.
+  - **Rehearsal on Archil passed (run `7cwyr4`).** With the steps scripted in place of a model, the same loop made seven real Archil calls across five classes: one search, two plain reads, two file writes, one install, one test run. The script's own check afterwards found the whole test suite passing and the new function returning the required text. No call was granted the secrets together with network access or a writable folder. This proves everything except the model's own choices.
+  - **The real model run passed (run `5sb7jh`, model `claude-opus-5-5`).** Claude chose the steps itself and finished in five calls and 33 seconds: one plain read, two file writes, one install, one test run. The script's own check afterwards found the whole test suite passing and the new function returning the required text. No call was granted the secrets together with network access or a writable folder. The model's first command chained several reads with `;`, so the rules gave it the least-privileged class, which was enough for reading.
+  - **The search class was not used in that first run.** The model said it already knew how the `ms` package works and did not search.
+  - **A changed task made the real model use all five classes (run `y2mfnt`).** The task now also requires a short documentation file that cites a web page found through the agent's own search. Claude finished in ten calls and 41 seconds: three plain reads, two web searches, three file writes, one install, one test run. Its first search returned unrelated packages, so it searched again, read the saved results, and cited the `ms` package's own README. The script's checks afterwards found the test suite passing, the function correct, and the cited URL among the pages the agent's search had returned. No call was granted the secrets together with network access or a writable folder. The source check confirms where the URL came from; it does not judge whether the page is the right one.
+  - The scripts read `.env` (or `.env.txt`) from the project folder themselves. The file is ignored by git.
+  - **Superseded:** the gap where a test's output could carry a secret back to the model is now closed by scrubbing (see "The end-to-end build" above).
+- **The open name-lookup question.** Under a network deny rule, connections are blocked but names still resolve. Ask the Archil team whether that is intended.
+- **Whether to drop Tested search.** The premise check is complete and came back against it: across nine real breakages in JavaScript and Python, a model with no tools fixed eight, and a coding agent with no internet fixed all nine (see the two "Premise check" sections below). By the test I set beforehand, my recommendation is to drop it as designed. Decision 10 stands until you change it.
 - **Scratch space.** Whether a serverless exec can write to scratch space inside its own microVM is untested. Needs an Archil API key.
 - **Plan.** At about 25 serverless calls per run, the free plan's 1,000-call cap lasts roughly 40 runs. The reviewers recommend the $10 Developer plan. Not yet decided.
-- **One alternative not ruled out on evidence.** In the 19-idea review the Injection test range was all three reviewers' pick for technical execution (12 of 15 for technical depth, against 10 for Tested search before its improvements). It was passed over because it needs sandbox compute and uses forking as its reset.
+- **Whether the Injection test range has a result to show.** It was all three reviewers' pick for technical execution in the 19-idea review. A reduced premise check found that none of four simple injected instructions (blunt override, fake administrator notice, helpful-looking request for a secret, request to delete a ticket) landed on the weakest Claude model available, judged by the files afterwards. Those agents ran inside a harness that already tells them to treat file contents as data, so this says little about a plain agent or about other models. Published results suggest weaker and open-weight models are far more vulnerable, but I have not confirmed that. The full check needs a model API key: `premise-check/injection-check.mjs` runs the same four attacks against any models you name, with a plain prompt and a hardened one, and its scoring has passed a self-test. Until that is run, whether this idea produces a before-and-after number is unknown.
 
 ## Chosen project: Tested search
 
@@ -41,6 +175,59 @@ Narrowed from "any error" to "my code broke after an upgrade". Breakages from re
 5. **Remember.** Store verified fixes on the disk so the same breakage is answered at once next time.
 
 Stages 1 and 3 share one runner. Each stage is a demo on its own if a later one slips.
+
+### Premise check: JavaScript result
+
+The project only makes sense if there are real breakages from recent library releases where a model's unaided fix fails and a fix from the web passes. I said beforehand that if three such cases could not be found, the idea should be dropped.
+
+**Recent breakages are easy to find.** An agent scanned about 130 popular npm packages and found 25 with a new major version since 1 July 2026. All five it tried reproduced. I re-ran each one: it passes on the old version, fails on the new one, and passes again with the documented fix.
+
+**A model fixed all five without the web.** Two controls each got clean copies with the fix files removed. I ran every attempt myself against the breaking version, and confirmed that none had changed the assertions.
+
+| Package | Broke in | What breaks | Model alone, no tools | Coding agent, no internet |
+|---|---|---|---|---|
+| markdown-it | 15.0.0 (30 July) | Bare domains silently stop becoming links | Passed | Passed |
+| msw | 3.0.0 (28 September) | A callback is silently never called | Passed | Passed |
+| execa | 10.0.0 (17 July) | `subprocess.on is not a function` | Passed | Passed |
+| p-queue | 10.0.0 (12 October) | `queue.on is not a function` | Passed | Passed |
+| query-string | 10.0.0 (21 October) | Throws on a `URL` value | Passed | Passed |
+
+- **Model alone** saw only the script and the error text and used no tools. It rated its own confidence low or medium-low on four of the five, and was right on all of them.
+- **Coding agent, no internet** could run the script and read the installed package. It solved all five in 15 tool calls in total, mostly from the type definitions and readme that ship inside the package.
+
+**Why the model could do it.** The new interfaces follow familiar conventions, and several were discussed in public long before they shipped (execa's replacement property was proposed in 2020; p-queue's change had been discussed since 2022). The installed package also carries its own documentation.
+
+**What this means.** On this sample the web search adds nothing a model does not already manage, which is the weakness all three reviewers ranked first. The parts of the design this check does not undermine are the version sweep, running candidates to verify them, and the ledger.
+
+**Limits of the check.** Five cases, one ecosystem, one model family, and all five are interface changes in new major versions. Bugs introduced by a release, where the only fix is a workaround in an issue thread, were not tested. The Python half is reported next.
+
+### Premise check: Python result and overall tally
+
+An agent listed PyPI releases since July 2026 for about 40 top packages and found more than ten reproducible breaks. It kept four, favouring ones that fail silently and were not announced by deprecation warnings. I re-ran each: passes on the old version, fails on the new one, passes with the documented fix.
+
+| Package | Broke in | What breaks | Model alone, no tools | Coding agent, no internet |
+|---|---|---|---|---|
+| pandas | 3.1.0 (22 October) | Reading a CSV column as a category silently turns zip code `"02139"` into the number `2139` | Passed | Passed |
+| polars | 2.0.0 (6 October) | Headerless CSV columns are numbered from 0, so `column_1` silently points at the wrong column | Passed | Passed |
+| openai | 3.0.0 (12 August) | The SDK moved to a different HTTP library, so `import httpx` fails in a clean environment | **Failed** (the script hung and never reached its assertions) | Passed |
+| pydantic | 2.14.0 (8 October) | Dates inside a free-form dictionary silently serialise as text instead of a number | Passed | Passed |
+
+I ran every attempt myself and confirmed no assertion line was changed.
+
+- **Model alone** said it did not recognise any of the four releases. Its three passes work by avoiding the changed behaviour, and some are heavier than the documented fix: for pydantic it wrote a custom serialiser of about 20 lines where the documented fix is a one-line setting.
+- **Coding agent, no internet** solved all four in 16 tool calls in total, by probing behaviour and reading the docstrings and package metadata installed with the library. For openai it found the new HTTP library's name in the package metadata in four calls.
+- **I did not diagnose** why the model-alone openai attempt hangs.
+
+**Overall tally across both ecosystems**
+
+| | JavaScript (5 cases) | Python (4 cases) | Total (9) |
+|---|---|---|---|
+| Model alone, no tools | 5 | 3 | 8 |
+| Coding agent, no internet | 5 | 4 | 9 |
+
+**Conclusion.** No case needed the web. The one case a bare model missed was solved by a coding agent from files already on the machine. The premise that web search is needed because a model's knowledge is stale is not supported by this check. Looking things up did produce tidier fixes than guessing, but the installed package's own documentation was enough for that.
+
+**What this does not show.** Nine cases and one model family. All nine are changes to a library's interface or behaviour that its changelog describes. Bugs introduced by a release, where the only remedy is a workaround in an issue thread, were not tested.
 
 ### The idea as first proposed
 
@@ -405,6 +592,10 @@ Checked against Archil's docs unless marked otherwise.
 - A fork of a stopped sandbox comes up in about a second. Fork time with memory is not published.
 - A request to an exposed port wakes a stopped sandbox. Port traffic does not reset the idle timer.
 - Sandboxes cannot reach each other over the network.
+
+**Serverless exec**
+- Each call starts a fresh microVM (docs), and the API reference says the container is shut down when the command ends.
+- The microVM is destroyed after the call, not reset and reused. This is the answer you relayed on 2026-11-10 to the question "after an exec call finishes, is the microVM destroyed, or reset and reused?". The docs do not state it, and I have not verified it myself.
 
 **Web page**
 - Browser access to the S3 API needs an allowlist entry from Archil support, so any web page needs a small backend.

@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scoped Runner</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --panel-2: #f9fafb; --ink: #111827; --muted: #5b6474; --faint: #8a93a3;
+    --line: #e2e5ea; --accent: #2f5bea; --accent-ink: #ffffff;
+    --good: #15803d; --good-bg: #e8f6ed; --bad: #c62828; --bad-bg: #fdecec; --warn: #b45309; --warn-bg: #fdf3e3;
+    --c-search: #2563eb; --c-install: #c2690a; --c-edit: #7c3aed; --c-test: #047857; --c-other: #5b6474; --c-open: #c62828;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c1016; --panel: #141a22; --panel-2: #10151c; --ink: #e6ebf1; --muted: #9aa4b2; --faint: #6b7584;
+      --line: #252e3a; --accent: #6d95ff; --accent-ink: #0c1016;
+      --good: #4ade80; --good-bg: #12261a; --bad: #f87171; --bad-bg: #2c1515; --warn: #fbbf24; --warn-bg: #2a2110;
+      --c-search: #60a5fa; --c-install: #f59e0b; --c-edit: #a78bfa; --c-test: #34d399; --c-other: #94a3b8; --c-open: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button, select, textarea { font: inherit; color: inherit; }
+  code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo { width: 30px; height: 30px; border-radius: 8px; background:
+    linear-gradient(135deg, var(--c-search) 0 25%, var(--c-install) 25% 50%, var(--c-edit) 50% 75%, var(--c-test) 75%); }
+  .brand h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  .brand p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .env { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--muted); background: var(--panel-2); white-space: nowrap; }
+  .pill b { color: var(--ink); font-weight: 600; }
+  .pill.warn { color: var(--warn); border-color: currentColor; background: var(--warn-bg); }
+  .pill.bad { color: var(--bad); border-color: currentColor; background: var(--bad-bg); }
+  .banner { margin: 0; padding: 9px 24px; background: var(--warn-bg); color: var(--warn); border-bottom: 1px solid var(--line); font-size: 13px; }
+
+  .layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 20px; padding: 20px 24px 40px; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 960px) { .layout { grid-template-columns: 1fr; padding: 16px; } .top { padding: 12px 16px; } }
+  .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-width: 0; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 7px 9px; }
+  textarea { resize: vertical; margin-top: 8px; font-size: 12.5px; line-height: 1.45; }
+  textarea[readonly] { color: var(--muted); }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: var(--panel-2); padding: 7px 8px; cursor: pointer; color: var(--muted); }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-checked="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .seg button:disabled { cursor: not-allowed; opacity: 0.5; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .actions button { border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px; padding: 8px 10px; cursor: pointer; font-weight: 600; }
+  .actions button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .actions button:disabled { opacity: 0.55; cursor: progress; }
+  .error { color: var(--bad); background: var(--bad-bg); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; margin: 10px 0 0; }
+
+  .badge { display: inline-block; font: 600 11px/1 var(--mono); padding: 4px 7px; border-radius: 5px; color: #fff; background: var(--c-other); text-transform: lowercase; white-space: nowrap; }
+  .cls-search { background: var(--c-search); } .cls-install { background: var(--c-install); } .cls-edit { background: var(--c-edit); }
+  .cls-test { background: var(--c-test); } .cls-other { background: var(--c-other); } .cls-open { background: var(--c-open); }
+  @media (prefers-color-scheme: dark) { .badge { color: #0c1016; } }
+
+  table.policy { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.policy th { text-align: left; color: var(--faint); font-weight: 500; padding: 0 4px 6px; }
+  table.policy td { padding: 5px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  table.policy tr.sep td { border-top: 2px solid var(--line); }
+  .yes { color: var(--ink); font-weight: 600; } .no { color: var(--faint); }
+  .net { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+
+  .runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow: hidden auto; }
+  .runs li button > span { min-width: 0; }
+  .runs li button { width: 100%; text-align: left; border: 1px solid transparent; background: none; border-radius: 8px; padding: 7px 8px; cursor: pointer; display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; }
+  .runs li button:hover { background: var(--panel-2); }
+  .runs li button[aria-current="true"] { border-color: var(--line); background: var(--panel-2); }
+  .runs .t { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .runs .s { color: var(--muted); font-size: 11.5px; }
+  .runs .c { color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); }
+  .dot.passed { background: var(--good); } .dot.failed { background: var(--bad); }
+  .dot.running { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  @media (prefers-reduced-motion: reduce) { .dot.running, .spin { animation: none !important; } }
+  .empty-list { color: var(--faint); font-size: 12.5px; }
+
+  .view { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  .intro { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px; }
+  .intro h2 { margin: 0 0 6px; font-size: 22px; letter-spacing: -0.015em; }
+  .intro > p { color: var(--muted); max-width: 70ch; margin: 0 0 18px; }
+  .flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 700px) { .flow { grid-template-columns: 1fr; } }
+  .flow div { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--panel-2); }
+  .flow b { display: block; margin-bottom: 4px; }
+  .flow span { color: var(--muted); font-size: 13px; }
+
+  .head { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+  .head-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .head h2 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+  .status { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; }
+  .status.running { color: var(--accent); } .status.passed { color: var(--good); background: var(--good-bg); }
+  .status.failed { color: var(--bad); background: var(--bad-bg); } .status.interrupted { color: var(--faint); }
+  .meta { color: var(--muted); font-size: 12.5px; margin-top: 6px; display: flex; gap: 6px 14px; flex-wrap: wrap; }
+  .meta code { color: var(--ink); }
+  .activity { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .spin { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: rot 0.8s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .task { margin-top: 10px; }
+  .task summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+  .task p { white-space: pre-wrap; margin: 8px 0 0; font-size: 13px; color: var(--ink); }
+
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+  .tile .v { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .tile .l { color: var(--muted); font-size: 12.5px; }
+  .tile.good .v { color: var(--good); } .tile.bad { border-color: var(--bad); } .tile.bad .v { color: var(--bad); }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+  .panel > h3 { margin: 0 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+  .panel > .sub { color: var(--faint); font-size: 12.5px; margin: 0 0 10px; }
+  .bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--panel-2); margin: 8px 0 8px; }
+  .bar span { display: block; height: 100%; }
+  .legend { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  .timeline { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; }
+  .timeline > li { border-top: 1px solid var(--line); }
+  .timeline > li:first-child { border-top: 0; }
+  .call summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 34px 64px minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 9px 2px; }
+  .call summary::-webkit-details-marker { display: none; }
+  .call .n { color: var(--faint); font: 12px var(--mono); }
+  .call .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .call .res { font-size: 12px; color: var(--muted); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+  .call .res .x { color: var(--warn); font-weight: 600; } .call .res .e { color: var(--bad); font-weight: 600; }
+  .chips { grid-column: 3 / 5; display: flex; gap: 5px; flex-wrap: wrap; }
+  @media (max-width: 600px) { .call .label { grid-column: 3 / 5; white-space: normal; overflow-wrap: anywhere; } .call .res { grid-column: 3 / 5; text-align: left; } }
+  .chip { font: 11px/1.3 var(--mono); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--faint); max-width: 100%; overflow-wrap: anywhere; }
+  .chip.on { color: var(--ink); background: var(--panel-2); }
+  .chip.sens { color: var(--c-test); border-color: currentColor; }
+  .chip.netc { color: var(--c-search); border-color: currentColor; }
+  .chip.danger { color: var(--bad); border-color: currentColor; background: var(--bad-bg); }
+  .chip.red { color: var(--warn); border-color: currentColor; background: var(--warn-bg); }
+  .call .body { padding: 0 2px 12px 44px; }
+  .call .why { color: var(--muted); font-size: 12.5px; margin: 0 0 6px; }
+  pre.out { margin: 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  .say { padding: 8px 2px 8px 44px; color: var(--muted); font-size: 13px; font-style: italic; }
+  .rej { padding: 8px 2px 8px 44px; color: var(--warn); font-size: 13px; }
+  .results { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; overflow-wrap: anywhere; }
+  .results a { color: var(--accent); }
+
+  .checks { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .checks li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+  .mark { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 12px; color: #fff; }
+  .mark.ok { background: var(--good); } .mark.no { background: var(--bad); } .mark.warn { background: var(--warn); }
+  table.matrix .dns-open { color: var(--warn); font-weight: 600; }
+  .rej code { margin: 0 6px; }
+  .rej div { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+  @media (prefers-color-scheme: dark) { .mark { color: #0c1016; } }
+  .checks .d { color: var(--muted); font-size: 12.5px; word-break: break-word; }
+  .final { white-space: pre-wrap; font-size: 13.5px; margin: 0; }
+  .notes { color: var(--faint); font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
+  .notes .bad { color: var(--bad); }
+
+  .matrix-wrap { overflow-x: auto; }
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }
+  table.matrix td small { display: block; font-size: 11px; color: var(--faint); }
+  table.matrix th { text-align: left; font-weight: 500; color: var(--faint); font-size: 12px; padding: 0 8px 8px; vertical-align: bottom; }
+  table.matrix td { padding: 9px 8px; border-top: 1px solid var(--line); vertical-align: middle; }
+  table.matrix tr.danger td { background: var(--bad-bg); }
+  table.matrix .cell-yes { font-weight: 700; }
+  table.matrix .cell-no { color: var(--faint); }
+  table.matrix .back { font-family: var(--mono); font-size: 11.5px; color: var(--muted); word-break: break-all; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--good-bg); color: var(--good); font-weight: 600; margin-left: 4px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="logo" aria-hidden="true"></div>
+    <div><h1>Scoped Runner</h1><p>Per-call access for agents that have no sandbox</p></div>
+  </div>
+  <div class="env" id="env"></div>
+</header>
+<p id="banner" class="banner" hidden></p>
+
+<main class="layout">
+  <aside class="side">
+    <section class="card" aria-labelledby="startTitle">
+      <h2 id="startTitle">Start a run</h2>
+      <label for="task">Task</label>
+      <select id="task"></select>
+      <textarea id="taskText" rows="7" spellcheck="false" aria-label="Task text"></textarea>
+      <div class="seg" role="radiogroup" aria-label="Mode">
+        <button type="button" role="radio" data-mode="live">Live model</button>
+        <button type="button" role="radio" data-mode="rehearse">Rehearsal</button>
+      </div>
+      <p class="hint" id="modeHint"></p>
+      <div class="actions">
+        <button type="button" id="runAgent" class="primary">Run agent</button>
+        <button type="button" id="runMatrix">Measure access</button>
+      </div>
+      <p class="hint">Each run gets three fresh disks of its own, deleted at the end. “Measure access” makes one harmless probe per class, plus one with no limits for comparison.</p>
+      <p class="error" id="startError" hidden></p>
+    </section>
+
+    <section class="card" aria-labelledby="policyTitle">
+      <h2 id="policyTitle">Access classes</h2>
+      <table class="policy" id="policy"></table>
+      <p class="hint">Fixed rules sort every tool call into a class; the model never chooses. A command that chains, pipes or redirects always gets <b>other</b>. The API key is never inside a call: for <b>test</b>, Archil adds it to requests to your service on the way out.</p>
+    </section>
+
+    <section class="card" aria-labelledby="runsTitle">
+      <h2 id="runsTitle">Runs</h2>
+      <ul class="runs" id="runs"></ul>
+    </section>
+  </aside>
+
+  <section class="view" id="view" aria-live="polite"></section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const CLASS_ORDER = ['search', 'install', 'edit', 'test', 'other', 'open'];
+  const CLASS_COLOR = { search: 'var(--c-search)', install: 'var(--c-install)', edit: 'var(--c-edit)', test: 'var(--c-test)', other: 'var(--c-other)', open: 'var(--c-open)' };
+
+  function h(tag, props, ...kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (v == null || v === false) continue;
+      if (k === 'class') e.className = v;
+      else if (k === 'text') e.textContent = v;
+      else if (k === 'style') e.setAttribute('style', v);
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v === true ? '' : v);
+    }
+    for (const kid of kids.flat(Infinity)) {
+      if (kid == null || kid === false) continue;
+      e.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    }
+    return e;
+  }
+  const badge = (cls) => h('span', { class: `badge cls-${cls}` }, cls === 'open' ? 'no limits' : cls);
+  const secs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
+  const netHosts = (n) => (n?.allow ?? []).map((x) => (typeof x === 'string' ? x : x.target));
+  const access = (v) => (v === 'write' ? 'rw' : v === 'read' ? 'ro' : '—');
+  const ago = (t) => {
+    if (!t) return '';
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    const d = new Date(t);
+    return s < 86400 ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString();
+  };
+
+  let config = null;
+  let mode = 'live';
+  let current = null; // { id, ctrl, s: state, ui: elements }
+  let runsCache = [];
+
+  // ------------------------------------------------------------------ setup
+  async function init() {
+    config = await fetch('/api/config').then((r) => r.json());
+    const env = $('env');
+    if (config.fake) env.append(h('span', { class: 'pill warn' }, h('b', null, 'FAKE MODE')));
+    env.append(h('span', { class: 'pill' }, 'Archil ', h('b', null, config.region)));
+    if (config.fake) env.append(h('span', { class: 'pill' }, 'Archil ', h('b', null, 'stand-in')));
+    else env.append(h('span', { class: `pill${config.archil ? '' : ' bad'}` }, config.archil ? 'Archil key ' : 'No Archil key', config.archil ? h('b', null, 'set') : null));
+    env.append(h('span', { class: `pill${config.modelKey ? '' : ' warn'}` }, 'Model ', h('b', null, config.model)));
+    env.append(h('span', { class: `pill${config.serviceProblem ? ' bad' : ''}`, title: config.serviceProblem || 'The sample project\'s own API, in a small Archil sandbox. Each run gets its own key, added by Archil at the network edge.' }, 'Service ', h('b', null, config.fake ? 'stand-in' : config.service ? 'running' : config.serviceProblem ? 'failed' : 'starting')));
+    env.append(h('span', { class: 'pill' }, 'Image ', h('b', null, config.image)));
+    if (config.fake) { $('banner').hidden = false; $('banner').textContent = 'Fake mode: stand-ins for Archil and the model. Nothing leaves this machine, and steps are scripted. Use it to try the dashboard; start without --fake for real runs.'; }
+    else if (!config.archil) { $('banner').hidden = false; $('banner').textContent = config.archilProblem || 'Archil is not configured.'; }
+
+    const sel = $('task');
+    for (const t of config.tasks) sel.append(h('option', { value: t.id }, t.title));
+    sel.append(h('option', { value: 'custom' }, 'Custom task…'));
+    sel.addEventListener('change', syncTask);
+    for (const b of document.querySelectorAll('.seg button')) b.addEventListener('click', () => setMode(b.dataset.mode));
+    setMode(config.modelKey && !config.fake ? 'live' : 'rehearse');
+    $('runAgent').addEventListener('click', () => start('agent'));
+    $('runMatrix').addEventListener('click', () => start('matrix'));
+    renderPolicy();
+
+    await refreshRuns();
+    const m = /run=([a-z0-9]+)/.exec(location.hash);
+    if (m && runsCache.some((r) => r.id === m[1])) follow(m[1]);
+    else renderIntro();
+    setInterval(() => { if (runsCache.some((r) => r.status === 'running')) refreshRuns(); else renderRuns(); }, 4000);
+    window.addEventListener('hashchange', () => { const x = /run=([a-z0-9]+)/.exec(location.hash); if (x && x[1] !== current?.id) follow(x[1]); });
+  }
+
+  function setMode(m) {
+    if (m === 'live' && (!config.modelKey || config.fake)) m = 'rehearse';
+    mode = m;
+    for (const b of document.querySelectorAll('.seg button')) {
+      b.setAttribute('aria-checked', String(b.dataset.mode === m));
+      if (b.dataset.mode === 'live') b.disabled = !config.modelKey || config.fake;
+    }
+    $('modeHint').textContent = config.fake
+      ? 'Fake mode runs the scripted rehearsal against stand-ins.'
+      : m === 'live'
+        ? `Claude (${config.model}) chooses every step. A run takes about a minute and makes roughly 10 to 20 Archil calls.`
+        : 'The same real Archil calls, with scripted steps in place of the model. It follows the preset task.';
+    syncTask();
+  }
+
+  function syncTask() {
+    const sel = $('task');
+    const ta = $('taskText');
+    if (mode !== 'live') sel.value = config.tasks[0].id;
+    sel.disabled = mode !== 'live';
+    if (sel.value === 'custom') {
+      ta.readOnly = false;
+      if (!ta.dataset.custom) { ta.value = ''; ta.placeholder = 'Describe a change to the sample Node.js project (src/greet.js, test/greet.test.js). The test suite is re-run independently afterwards.'; }
+      ta.dataset.custom = '1';
+      ta.focus();
+    } else {
+      ta.readOnly = true;
+      delete ta.dataset.custom;
+      ta.value = config.tasks.find((t) => t.id === sel.value)?.text ?? '';
+    }
+  }
+
+  const netText = (n) => (n === null ? 'open' : n === 'service' ? 'your service only' : netHosts(n).join(', ') || 'none');
+  const keyText = (k) => (k === 'edge' ? 'at edge' : k === 'inside' ? 'inside' : '—');
+
+  function renderPolicy() {
+    const t = $('policy');
+    t.append(h('tr', null, h('th', null, 'Class'), h('th', null, 'Project'), h('th', null, 'Web'), h('th', null, 'API key'), h('th', null, 'Network')));
+    for (const name of CLASS_ORDER) {
+      const c = config.classes[name];
+      if (!c) continue;
+      const net = netText(c.network);
+      t.append(h('tr', { class: name === 'open' ? 'sep' : null, title: c.describe },
+        h('td', null, badge(name)),
+        h('td', { class: c.app === 'none' ? 'no' : 'yes' }, access(c.app)),
+        h('td', { class: c.web === 'none' ? 'no' : 'yes' }, access(c.web)),
+        h('td', { class: c.key === 'none' ? 'no' : 'yes' }, keyText(c.key)),
+        h('td', { class: `net ${net === 'none' ? 'no' : 'yes'}` }, net)));
+    }
+  }
+
+  // ------------------------------------------------------------------ runs list
+  async function refreshRuns() {
+    try { runsCache = await fetch('/api/runs').then((r) => r.json()); } catch { return; }
+    renderRuns();
+  }
+  function renderRuns() {
+    const ul = $('runs');
+    ul.replaceChildren();
+    if (!runsCache.length) { ul.append(h('li', { class: 'empty-list' }, 'No runs yet.')); return; }
+    for (const r of runsCache.slice(0, 40)) {
+      const kind = r.kind === 'matrix' ? 'access matrix' : r.simulated ? 'fake' : r.mode === 'live' ? 'live' : 'rehearsal';
+      const tail = r.status === 'running' ? 'running' : r.checksTotal ? `${r.checksPassed}/${r.checksTotal} checks` : r.status;
+      ul.append(h('li', null, h('button', { type: 'button', 'aria-current': String(current?.id === r.id), onclick: () => follow(r.id) },
+        h('span', { class: `dot ${r.status}` }),
+        h('span', null, h('div', { class: 't' }, r.title), h('div', { class: 's' }, `${kind} · ${r.calls} calls · ${ago(r.startedAt)}`)),
+        h('span', { class: 'c' }, tail))));
+    }
+  }
+
+  // ------------------------------------------------------------------ start
+  async function start(kind) {
+    const err = $('startError');
+    err.hidden = true;
+    const buttons = [$('runAgent'), $('runMatrix')];
+    buttons.forEach((b) => (b.disabled = true));
+    try {
+      const body = { kind, mode, taskId: $('task').value, taskText: $('taskText').value };
+      const r = await fetch('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await refreshRuns();
+      follow(j.id);
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+    } finally {
+      buttons.forEach((b) => (b.disabled = false));
+    }
+  }
+
+  // ------------------------------------------------------------------ following a run
+  async function follow(id) {
+    if (current?.ctrl) current.ctrl.abort();
+    const ctrl = new AbortController();
+    current = { id, ctrl, s: { calls: [], checks: [], rows: [], start: null, end: null, summary: null }, ui: {} };
+    if (location.hash !== `#run=${id}`) history.replaceState(null, '', `#run=${id}`);
+    renderRuns();
+    $('view').replaceChildren(h('div', { class: 'head' }, h('div', { class: 'activity' }, h('span', { class: 'spin' }), 'Loading…')));
+    const mine = current;
+    try {
+      const res = await fetch(`/api/runs/${id}/events`, { signal: ctrl.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const chunk = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const line = chunk.split('\n').find((l) => l.startsWith('data: '));
+          if (line && current === mine) handle(JSON.parse(line.slice(6)));
+        }
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError' && current === mine) $('view').replaceChildren(h('div', { class: 'head' }, h('p', { class: 'error' }, `Could not load the run: ${e.message}`)));
+    }
+  }
+
+  function handle(ev) {
+    const { s, ui } = current;
+    switch (ev.type) {
+      case 'start': s.start = ev; (ev.kind === 'matrix' ? shellMatrix : shellAgent)(ev); activity(ev.kind === 'matrix' ? 'Creating disks and registering a key for this run…' : 'Creating this run’s disks, registering its key and uploading the project…'); break;
+      case 'disks': note(`Disks for this run: ${ev.names.join(', ')}`); break;
+      case 'status': activity(ev.text); break;
+      case 'say': ui.timeline?.append(h('li', { class: 'say' }, `Claude: ${ev.text}`)); break;
+      case 'rejected':
+        if (ev.refused) { s.refused = (s.refused || 0) + 1; updateTiles(); }
+        ui.timeline?.append(h('li', { class: 'rej' }, ev.class ? badge(ev.class) : null, ' ', h('code', null, ev.label), h('div', null, ev.refused ? ev.problem : `Refused before any call was made: ${ev.problem}`)));
+        break;
+      case 'call': s.calls.push(ev.call); addCall(ev.call); updateTiles(); activity(s.start?.mode === 'live' ? 'Claude is choosing the next step…' : 'Next scripted step…'); break;
+      case 'agent-done': agentDone(ev); break;
+      case 'check': s.checks.push(ev.check); addCheck(ev.check); break;
+      case 'gap': addGap(ev.text); break;
+      case 'summary': s.summary = ev.summary; updateTiles(); break;
+      case 'measure': s.rows = ev.rows; showMeasured(ev.rows); updateTiles(); break;
+      case 'matrix-row': s.rows.push(ev.row); ui.addRow(ev.row); break;
+      case 'error': note(`Stopped: ${ev.text}`, true); break;
+      case 'cleanup':
+        if (ev.recovered) {
+          s.recovered = !(ev.failed ?? []).length;
+          if (ev.deleted?.length) note(`When the server restarted, it deleted the ${ev.deleted.length} disk(s) this run had left, and revoked its key.`);
+          if (ev.missing?.length) note(`${ev.missing.length} disk(s) from this run were already gone.`);
+        } else {
+          if (ev.kept?.length) note(`Kept disks: ${ev.kept.join(', ')}`);
+          if (ev.deleted?.length) note(`Deleted all ${ev.deleted.length} disks this run created.`);
+        }
+        for (const f of ev.failed ?? []) note(`Could not delete ${f}`, true);
+        break;
+      case 'end': s.end = ev; finish(ev); refreshRuns(); break;
+    }
+  }
+
+  function header(ev, title) {
+    const ui = current.ui;
+    ui.status = h('span', { class: 'status running' }, 'running');
+    ui.elapsed = h('span');
+    ui.activityText = h('span');
+    ui.activity = h('div', { class: 'activity' }, h('span', { class: 'spin' }), ui.activityText);
+    const modeText = ev.simulated ? 'fake (stand-ins)' : ev.kind === 'matrix' ? 'real Archil' : ev.mode === 'live' ? 'live model' : 'rehearsal (scripted steps, real Archil)';
+    const head = h('div', { class: 'head' },
+      h('div', { class: 'head-row' }, h('h2', null, title), ui.status),
+      h('div', { class: 'meta' },
+        h('span', null, modeText),
+        ev.model ? h('span', null, 'model ', h('code', null, ev.model)) : null,
+        h('span', null, 'region ', h('code', null, ev.region)),
+        h('span', null, 'run ', h('code', null, ev.id)),
+        h('span', null, new Date(ev.at).toLocaleString()),
+        ui.elapsed),
+      ev.task ? h('details', { class: 'task' }, h('summary', null, 'Task given to the agent'), h('p', null, ev.task.text)) : null,
+      ui.activity);
+    clearInterval(ui.timer);
+    const tick = () => { const end = current?.s.end?.at ?? Date.now(); ui.elapsed.textContent = `${Math.max(0, Math.round((end - ev.at) / 1000))} s`; };
+    tick();
+    ui.timer = setInterval(() => { if (current?.ui !== ui || current.s.end) return clearInterval(ui.timer); tick(); }, 1000);
+    return head;
+  }
+
+  function panel(title, sub, ...kids) { return h('section', { class: 'panel' }, h('h3', null, title), sub ? h('p', { class: 'sub' }, sub) : null, ...kids); }
+
+  // The measured table, shared by the access matrix and the end of every agent run.
+  function measureTable() {
+    const tbody = h('tbody');
+    const cell = (v, yesWord, labels = {}) => {
+      if (v == null) return h('td', { class: 'cell-no' }, '?');
+      const yes = v === yesWord;
+      return h('td', { class: yes ? 'cell-yes' : 'cell-no' }, yes ? (labels.yes ?? 'yes') : ['no', h('small', null, labels[v] ?? v)]);
+    };
+    const add = (r) => {
+      const danger = r.keyInside || (r.service === 'authenticated' && r.outside === 'reachable');
+      tbody.append(h('tr', { class: danger ? 'danger' : null },
+        h('td', null, badge(r.class)),
+        h('td', { class: r.keyInside ? 'cell-yes' : 'cell-no' }, r.measured ? (r.keyInside ? 'yes' : 'no') : '?'),
+        cell(r.service, 'authenticated', { 'refused (HTTP 401)': 'refused: no key', blocked: 'blocked' }),
+        cell(r.outside, 'reachable'),
+        cell(r.workspaceWrite, 'allowed'),
+        cell(r.webWrite, 'allowed'),
+        h('td', { class: r.dns === 'answered' ? 'dns-open' : 'cell-no' }, r.dns ?? '?'),
+        r.error ? h('td', { class: 'back' }, `probe failed: ${r.error}`) : null));
+    };
+    const table = h('div', { class: 'matrix-wrap' }, h('table', { class: 'matrix' },
+      h('thead', null, h('tr', null, h('th', null, 'Class'), h('th', null, 'API key inside the call'), h('th', null, 'Reach your service'), h('th', null, 'Reach an outside host'), h('th', null, 'Write the project'), h('th', null, 'Write web results'), h('th', null, 'DNS lookups'))),
+      tbody));
+    return { table, add };
+  }
+
+  function shellAgent(ev) {
+    const ui = current.ui;
+    const tile = (label, v = '0') => { const val = h('div', { class: 'v' }, v); const t = h('div', { class: 'tile' }, val, h('div', { class: 'l' }, label)); return { t, v: val }; };
+    ui.tCalls = tile('Tool calls, one microVM each');
+    ui.tKey = tile('Classes found holding the API key (measured after the run)', '…');
+    ui.tRefused = tile('Outbound calls refused after Claude saw service data');
+    ui.tRed = tile('Secret values removed from output');
+    ui.bar = h('div', { class: 'bar' });
+    ui.legend = h('div', { class: 'legend' });
+    ui.timeline = h('ol', { class: 'timeline' });
+    ui.final = h('section', { class: 'panel', hidden: true });
+    ui.measured = h('section', { class: 'panel', hidden: true });
+    ui.checks = h('ul', { class: 'checks' });
+    ui.notes = h('div', { class: 'notes' });
+    $('view').replaceChildren(
+      header(ev, ev.task?.title ?? 'Agent run'),
+      h('div', { class: 'tiles' }, ui.tCalls.t, ui.tKey.t, ui.tRefused.t, ui.tRed.t),
+      panel('Calls', 'Each row is one Archil call in a fresh microVM, with only what its class grants. Click a row for its output (already scrubbed).', ui.bar, ui.legend, ui.timeline),
+      ui.final,
+      ui.measured,
+      panel('Independent checks', 'Re-run on Archil after the agent stops, and measured rather than read from the policy. They do not take the agent’s word for anything.', ui.checks),
+      ui.notes);
+  }
+
+  function showMeasured(rows) {
+    const ui = current.ui;
+    const { table, add } = measureTable();
+    rows.forEach(add);
+    ui.measured.hidden = false;
+    ui.measured.replaceChildren(h('h3', null, 'Measured access'), h('p', { class: 'sub' }, 'After the agent finished, one harmless probe ran in each class: it looked for the API key in everything it could see, called your service, fetched example.com (on no allowlist), tried to write each folder and resolved a name.'), table);
+  }
+
+  function shellMatrix(ev) {
+    const ui = current.ui;
+    const { table, add } = measureTable();
+    ui.addRow = add;
+    ui.checks = h('ul', { class: 'checks' });
+    ui.notes = h('div', { class: 'notes' });
+    $('view').replaceChildren(
+      header(ev, 'Access matrix'),
+      panel('What each class could actually reach', 'Measured, not declared: the same harmless probe ran once per class, plus once with no limits, the way a conventional sandbox runs everything with the key on hand.', table),
+      panel('Checks', null, ui.checks),
+      ui.notes);
+  }
+
+  function chipsFor(g) {
+    const c = (text, cls) => h('span', { class: `chip ${cls}` }, text);
+    const hosts = g.network === null || g.network === 'service' ? [] : netHosts(g.network);
+    return [
+      c(`project ${access(g.app)}`, g.app === 'none' ? '' : g.app === 'write' ? 'on red' : 'on'),
+      c(`web ${access(g.web)}`, g.web === 'none' ? '' : g.web === 'write' ? 'on red' : 'on'),
+      g.key === 'edge' ? c('key added at the edge', 'sens') : g.key === 'inside' ? c('key inside', 'danger') : c('key —', ''),
+      g.network === null ? c('network open', 'danger') : g.network === 'service' ? c('net → your service only', 'sens') : hosts.length ? netChip(hosts) : c('network none', ''),
+    ];
+  }
+
+  function netChip(hosts) {
+    const text = hosts.length > 2 ? `net → ${hosts[0]} +${hosts.length - 1} more` : `net → ${hosts.join(', ')}`;
+    return h('span', { class: 'chip netc', title: hosts.join(', ') }, text);
+  }
+
+  const safeUrl = (u) => (/^https?:\/\//i.test(String(u)) ? String(u) : null);
+
+  function addCall(c) {
+    const ui = current.ui;
+    let res;
+    if (c.error) res = h('span', { class: 'e' }, 'call failed');
+    else if (c.tool === 'search') res = h('span', null, c.search?.status === 200 ? `${c.search.count} results` : h('span', { class: 'x' }, 'search failed'), ` · ${secs(c.wallMs)}`);
+    else res = h('span', null, c.exitCode === 0 ? 'exit 0' : h('span', { class: 'x' }, `exit ${c.exitCode}`), ` · ${secs(c.wallMs)}`);
+    const why = [];
+    if (c.grants.key === 'edge') why.push('This call could reach only your service. Archil added the API key to those requests on the way out, so the call never held it.');
+    if (c.redactions) why.push(`${c.redactions} occurrence(s) of a secret value were removed before the output reached the model.`);
+    const body = [];
+    if (why.length) body.push(h('p', { class: 'why' }, why.join(' ')));
+    if (c.search?.results?.length) body.push(h('ol', { class: 'results' }, c.search.results.map((r) => h('li', null, r.title, ' — ', safeUrl(r.url) ? h('a', { href: safeUrl(r.url), target: '_blank', rel: 'noopener noreferrer' }, r.url) : h('code', null, String(r.url))))));
+    const out = [c.output, c.stderr ? `stderr:\n${c.stderr}` : '', c.error ?? ''].filter(Boolean).join('\n');
+    if (out) body.push(h('pre', { class: 'out' }, out));
+    if (!body.length) body.push(h('p', { class: 'why' }, '(no output)'));
+    ui.timeline.append(h('li', null, h('details', { class: 'call' },
+      h('summary', null,
+        h('span', { class: 'n' }, `#${c.n}`),
+        badge(c.class),
+        h('code', { class: 'label', title: c.label }, c.label),
+        h('span', { class: 'res' }, res, c.redactions ? h('span', { class: 'tag' }, `${c.redactions} redacted`) : null),
+        h('span'), h('span'),
+        h('div', { class: 'chips' }, chipsFor(c.grants))),
+      h('div', { class: 'body' }, body))));
+  }
+
+  function updateTiles() {
+    const { s, ui } = current;
+    if (!ui.tCalls) return;
+    const calls = s.calls;
+    const red = calls.reduce((n, c) => n + (c.redactions || 0), 0);
+    ui.tCalls.v.textContent = calls.length;
+    ui.tRefused.v.textContent = s.refused || 0;
+    ui.tRed.v.textContent = red;
+    if (s.rows?.length) {
+      const holding = s.rows.filter((r) => r.class !== 'open' && r.keyInside).length;
+      ui.tKey.v.textContent = holding;
+      ui.tKey.t.className = `tile ${holding ? 'bad' : 'good'}`;
+    }
+    const counts = {};
+    for (const c of calls) counts[c.class] = (counts[c.class] || 0) + 1;
+    ui.bar.replaceChildren(...CLASS_ORDER.filter((k) => counts[k]).map((k) => h('span', { style: `width:${(100 * counts[k]) / calls.length}%;background:${CLASS_COLOR[k]}`, title: `${k}: ${counts[k]}` })));
+    ui.legend.replaceChildren(...CLASS_ORDER.filter((k) => counts[k]).map((k) => h('span', null, h('i', { style: `background:${CLASS_COLOR[k]}` }), `${k} ${counts[k]}`)));
+  }
+
+  function agentDone(ev) {
+    const ui = current.ui;
+    ui.final.hidden = false;
+    ui.final.replaceChildren(h('h3', null, 'The agent’s own summary'), h('p', { class: 'sub' }, `Stopped after ${ev.calls} calls in ${ev.seconds} s${ev.refused ? `, with ${ev.refused} refused` : ''}: ${ev.ended}.`), ev.finalText ? h('p', { class: 'final' }, ev.finalText) : null);
+  }
+
+  function addCheck(c) {
+    current.ui.checks?.append(h('li', null, h('span', { class: `mark ${c.ok ? 'ok' : 'no'}`, 'aria-label': c.ok ? 'passed' : 'failed' }, c.ok ? '✓' : '✗'), h('div', null, h('div', null, c.label), h('div', { class: 'd' }, c.detail))));
+  }
+
+  function addGap(text) {
+    current.ui.checks?.append(h('li', null, h('span', { class: 'mark warn', 'aria-label': 'known gap' }, '!'), h('div', null, h('div', null, 'Known platform gap: DNS'), h('div', { class: 'd' }, text))));
+  }
+
+  function activity(text) {
+    const ui = current.ui;
+    if (!ui.activity || current.s.end) return;
+    ui.activity.hidden = false;
+    ui.activityText.textContent = text;
+  }
+  function note(text, bad) { current.ui.notes?.append(h('div', { class: bad ? 'bad' : null }, text)); }
+
+  function finish(ev) {
+    const ui = current.ui;
+    if (ui.activity) ui.activity.hidden = true;
+    const st = ev.interrupted ? 'interrupted' : ev.ok ? 'passed' : 'failed';
+    if (ui.status) { ui.status.className = `status ${st}`; ui.status.textContent = ev.interrupted ? 'interrupted' : ev.ok ? 'all checks passed' : 'not all checks passed'; }
+    clearInterval(ui.timer);
+    if (ui.elapsed && current.s.start) ui.elapsed.textContent = `${Math.round((ev.at - current.s.start.at) / 1000)} s`;
+    if (ev.interrupted) {
+      if (current.s.recovered) note('This run stopped before it finished, because the process running it ended.');
+      else note('This run stopped before it finished, so its disks may still exist (names above). The server deletes them the next time it starts, once the process that ran it has ended.', true);
+    }
+  }
+
+  function renderIntro() {
+    current = null;
+    history.replaceState(null, '', location.pathname);
+    renderRuns();
+    $('view').replaceChildren(h('div', { class: 'intro' },
+      h('h2', null, 'Compute per tool call makes access per tool call possible.'),
+      h('p', null, 'An Archil agent has no sandbox: each tool call is a fresh microVM with only the disks it mounts. So each call can also get only the folders and network it needs. The API key is never inside any call: when the tests call your service, Archil adds the key to those requests on the way out. The step that downloads third-party code cannot reach your service, and once Claude has seen your service’s data, nothing more can go out to third parties.'),
+      h('div', { class: 'flow' },
+        h('div', null, h('b', null, '1. Claude picks a tool call'), h('span', null, 'bash, web_search or write_file, on a small Node.js project.')),
+        h('div', null, h('b', null, '2. Fixed rules pick its class'), h('span', null, 'Install, test, edit, search or other. The model never chooses its own access.')),
+        h('div', null, h('b', null, '3. One microVM, scoped access'), h('span', null, 'Only that class’s disks and network rule. The key is added at the network edge, never handed to the call.'))),
+      h('p', { class: 'hint', style: 'margin-top:16px' }, 'Start a run on the left, or pick an earlier one.')));
+  }
+
+  init().catch((e) => { $('view').replaceChildren(h('div', { class: 'head' }, h('p', { class: 'error' }, `Could not reach the server: ${e.message}`))); });
+})();
+</script>
+</body>
+</html>
