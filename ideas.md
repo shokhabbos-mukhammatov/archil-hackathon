@@ -115,7 +115,7 @@ The script is `premise-check/archil-check.mjs`. It created eight throwaway disks
 
 ### The end-to-end build (10 November 2026)
 
-Scoped Runner is now a complete project at the repository root: a local web dashboard (`npm start`) and a command-line tool around the same session code. All results below are from the hackathon account in `aws-us-west-2`. The README and `DEMO.md` in that folder carry the details.
+Scoped Runner is now a complete project at the repository root: a local web dashboard (`npm start`) and a command-line tool around the same session code. All results below are from the hackathon account in `aws-us-west-2`. The README carries the details.
 
 - **What was added.** Each run gets its own three disks and a fresh canary secret, and deletes them at the end. Several runs can go at once on one host. Secret values are scrubbed from everything a call returns, at the one point where output leaves Archil, which closes the "test output goes back to the model" gap. An access matrix measures what each class can actually reach. A fake mode with stand-ins lets the dashboard be tried with no keys.
 - **Live agent (run `7pt494`, Opus 5.5).** 10 calls in 36 seconds, all five independent checks passed, no call held the secrets with network access or a writable folder. Claude rejected an unrelated first search result and searched again.
