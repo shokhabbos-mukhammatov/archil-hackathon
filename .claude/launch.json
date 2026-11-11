@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard-fake",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scoped-runner/server.mjs", "--fake", "--port", "4319"],
+      "port": 4319
+    },
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scoped-runner/server.mjs", "--port", "4317"],
+      "port": 4317
+    }
+  ]
+}

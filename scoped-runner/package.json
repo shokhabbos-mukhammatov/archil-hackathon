@@ -1,0 +1,21 @@
+{
+  "name": "scoped-runner",
+  "version": "1.0.0",
+  "description": "Per-call access limits for agents with no sandbox, on Archil serverless execution",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "start:fake": "node server.mjs --fake",
+    "test": "node --test policy.test.mjs scrub.test.mjs session.test.mjs server.test.mjs && node agent.mjs --selftest",
+    "agent": "node agent.mjs",
+    "rehearse": "node agent.mjs --rehearse",
+    "matrix": "node agent.mjs --matrix",
+    "demo": "node demo.mjs"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "disk": "^1.12.1"
+  }
+}
