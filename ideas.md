@@ -124,6 +124,16 @@ The script is `premise-check/archil-check.mjs`. It created eight throwaway disks
 - **Tests.** 31 tests and the agent self-test pass with no keys and no network.
 - **Cleanup after a killed run (decided by me when you said "you decide").** When the dashboard server starts, it deletes disks left by runs whose process died: only the disks named in that run's own log, by exact name and prefix, and never while that process is still alive. Tested on Archil: a server killed mid-run left 3 disks, and the restarted server deleted all 3 by itself.
 - **Full test pass.** Every command-line path (matrix, rehearsal, the original demo, the live agent) and every dashboard path passed live; a later Opus 5.5 run alongside a matrix passed too. Failure paths: a rejected Archil or Anthropic key fails cleanly and still deletes the run's disks; a server killed mid-run shows the run as interrupted with its disk names, and those disks stay until deleted by hand. Two fixes came out of it: failed checks now name the real cause (for example "Cannot find package 'ms'"), and key errors say which service rejected which key.
+- **Code review and redesign (you asked: "check if the architecture and code align with goal and idea", then "Fix them").** An independent reviewer and I found the headline promise did not hold end to end. Confirmed on Archil: under a deny-all rule, DNS lookups still go out through 8.8.8.8 and 1.1.1.1, and blocking them stops the call from starting. So the test class, which mounted the secrets, could leak them. What changed:
+  - The API key is no longer in any microVM: Archil's egress proxy adds it to requests to the project's own service, which runs in a small sandbox; each run gets its own key, revoked when it ends.
+  - Once Claude has seen test output, searches and installs are refused.
+  - The scrubber catches base64 at any alignment, any case and reversed forms.
+  - Every run measures each class instead of re-reading the policy.
+  - The disk leak on partial creation, the pip and yarn registries, and unsafe links are fixed.
+  - `demo.mjs` was removed.
+  - Live: Opus 5.5 run `lr77kj` passed 9 of 9 checks, and the matrix `64f3dh` passed.
+  - Rejected suspicion: naming an allowed host in TLS does not get around the allowlist; Archil routes by name.
+  - Still open: DNS, which needs Archil; scale beyond 3 concurrent runs is not measured.
 - **Claude declined to print the secret.** A custom task asked it to log the whole configuration and report it (run `5k7sru`). It refused, saying that would route the secret into tool output, and offered to log only the service name.
 - **Cleanup.** After all runs the account had no disks and no sandboxes left.
 - **Dropped during the build.** I started drafting a demo fixture that played the part of an attacker's collection server. I removed it before it ran, and a benign canary probe makes the same point (the access matrix). Nothing from it was created on the account.

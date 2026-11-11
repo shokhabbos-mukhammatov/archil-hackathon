@@ -6,38 +6,56 @@ import { scrub } from './scrub.mjs';
 
 export const ROOT = '/mnt/archil';
 export const APP_DIR = `${ROOT}/app`;
-export const SECRETS_DIR = `${ROOT}/secrets`;
 export const WEB_DIR = `${ROOT}/web`;
+export const KEY_DIR = `${ROOT}/key`; // only ever mounted for the no-limits baseline
 
-export function buildCall({ command, mode, forcedClass, workspaceDisk, secretsDisk, webDisk, image }) {
+// `service` is { host, headers } for this run: the project's own service, and the headers
+// (the API key) Archil's egress proxy adds to every request to it. The headers go to Archil
+// as part of the network rule; they are never put into the command or onto a disk the call
+// can read.
+export function buildCall({ command, mode, forcedClass, workspaceDisk, webDisk, keyDisk, service, image }) {
   const grants = grantsFor(command, mode, forcedClass);
   const disks = {};
   if (grants.app === 'write') disks.app = { disk: workspaceDisk, queueMs: 15000 };
   if (grants.app === 'read') disks.app = { disk: workspaceDisk, readOnly: true };
-  if (grants.secrets === 'read') disks.secrets = { disk: secretsDisk, readOnly: true };
   if (grants.web === 'write') disks.web = { disk: webDisk, queueMs: 15000 };
   if (grants.web === 'read') disks.web = { disk: webDisk, readOnly: true };
+  if (grants.key === 'inside' && keyDisk) disks.key = { disk: keyDisk, readOnly: true };
   const request = { disks, command: `cd ${disks.app ? APP_DIR : ROOT} && ${command}` };
   if (image) request.baseImage = image;
-  if (grants.network) request.network = { egress: grants.network };
+  if (grants.network === 'service') {
+    request.network = { egress: service ? { default: 'deny', allow: [{ target: service.host, transform: { headers: service.headers } }] } : { default: 'deny' } };
+  } else if (grants.network) {
+    request.network = { egress: grants.network };
+  }
   return { grants, request };
 }
 
-// A harmless report of what a call with these grants can reach: one known file, one write
-// per folder, one outside request. It changes nothing and sends nothing outside. When the
-// secrets are readable it prints the (throwaway canary) configuration, so the host can show
-// that the scrubber removed the secret value from what came back.
-export const PROBE = `node -e '
-const fs = require("fs");
+// A harmless report of what a call with these grants can actually do: write each folder,
+// fetch an outside host, call the project's service, resolve a name. It also prints the
+// call's whole environment (and the key file, if one is mounted) so the host can count,
+// through the scrubber, whether the API key was anywhere inside the call. The service URL
+// travels as base64 data.
+const PROBE_SCRIPT = `node -e '
+const fs = require("fs"), dns = require("dns").promises;
+const serviceUrl = Buffer.from(process.argv[1] || "", "base64").toString("utf8");
 const readText = (p) => { try { return fs.readFileSync(p, "utf8").trim(); } catch { return null; } };
 const write = (dir) => { if (!fs.existsSync(dir)) return "not mounted"; const p = dir + "/.probe"; try { fs.writeFileSync(p, "x"); try { fs.rmSync(p); } catch {} return "allowed"; } catch { return "refused"; } };
+const reach = async (url, headers) => { try { const r = await fetch(url, { headers, signal: AbortSignal.timeout(6000) }); return r.status; } catch { return 0; } };
 (async () => {
-  let outside;
-  try { await fetch("https://example.com", { signal: AbortSignal.timeout(6000) }); outside = "reachable"; }
-  catch { outside = "blocked"; }
-  const secretText = readText("${SECRETS_DIR}/config.json");
-  console.log("PROBE " + JSON.stringify({ secrets: secretText === null ? "not available" : "readable", secretText, workspaceWrite: write("${APP_DIR}"), webWrite: write("${WEB_DIR}"), outside }));
+  const keyFile = readText("${KEY_DIR}/key.txt");
+  const outside = (await reach("https://example.com")) ? "reachable" : "blocked";
+  let service = "not configured";
+  if (serviceUrl) {
+    const s = await reach(serviceUrl + "/v1/account", keyFile ? { authorization: "Bearer " + keyFile } : {});
+    service = s === 200 ? "authenticated" : s ? "refused (HTTP " + s + ")" : "blocked";
+  }
+  let dnsResult; try { await dns.resolve4("example.com"); dnsResult = "answered"; } catch { dnsResult = "blocked"; }
+  console.log("PROBE " + JSON.stringify({ keyFile: keyFile === null ? "not available" : "readable", workspaceWrite: write("${APP_DIR}"), webWrite: write("${WEB_DIR}"), outside, service, dns: dnsResult }));
+  console.log("VISIBLE " + JSON.stringify(process.env) + " " + (keyFile || ""));
 })();'`;
+
+export const probeCommand = (serviceUrl) => `${PROBE_SCRIPT} ${Buffer.from(String(serviceUrl ?? ''), 'utf8').toString('base64')}`;
 
 // The web search tool. The query is data, never shell text: it travels as base64, whose
 // alphabet has no shell meaning, and is decoded inside the call.
@@ -85,6 +103,7 @@ export function checkWorkspacePath(relPath) {
   if (!p || p.startsWith('/') || p.includes('\\') || !/^[A-Za-z0-9._\/-]+$/.test(p)) return 'path must be a plain relative path inside the project';
   if (p.split('/').some((part) => part === '..' || part === '.' || part === '')) return 'path must not contain "..", "." or empty segments';
   if (p.split('/')[0] === 'node_modules') return 'node_modules is managed by the install step';
+  if (p === 'service.json') return 'service.json is provided by the host';
   return null;
 }
 
@@ -104,8 +123,8 @@ export const parseProbe = (stdout) => parseTagged(stdout, 'PROBE');
 export const parseSearch = (stdout) => parseTagged(stdout, 'SEARCH');
 
 // Runs one call. `options.secretValues` lists values the host knows are secret; they are
-// never sent to Archil (buildCall does not read them) and are removed from everything the
-// call returns, here, at the one point where output leaves Archil.
+// never put into the command or onto a disk (buildCall does not read them) and are removed
+// from everything the call returns, here, at the one point where output leaves Archil.
 export async function runCall(archil, options) {
   const { grants, request } = buildCall(options);
   const secrets = options.secretValues ?? [];

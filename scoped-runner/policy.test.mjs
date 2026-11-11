@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, grantsFor, hasNetwork, CLASSES } from './policy.mjs';
+import { classify, grantsFor, hasNetwork, reachesService, CLASSES, INSTALL_REGISTRIES } from './policy.mjs';
 import { buildCall, searchCommand, writeFileCommand, checkWorkspacePath, classOfStep } from './runner.mjs';
 
-const disks = { workspaceDisk: 'dsk-w', secretsDisk: 'dsk-s', webDisk: 'dsk-web' };
+const disks = { workspaceDisk: 'dsk-w', webDisk: 'dsk-web', keyDisk: 'dsk-key' };
+const service = { host: 'service.example.test', headers: { Authorization: 'Bearer svc_test_key_000000' } };
 
 test('installs and tests are recognised', () => {
   assert.equal(classify('npm install'), 'install');
@@ -33,42 +34,64 @@ test('no bash command can reach the search class', () => {
   }
 });
 
-test('no class has the secrets together with any network access', () => {
+test('invariant 1: no class holds the API key inside the call', () => {
+  for (const [name, c] of Object.entries(CLASSES)) assert.notEqual(c.key, 'inside', name);
+});
+
+test('invariant 2: only the test class reaches the service, and it reaches nothing else', () => {
+  const reaching = Object.entries(CLASSES).filter(([, c]) => reachesService(c)).map(([n]) => n);
+  assert.deepEqual(reaching, ['test']);
+  assert.equal(CLASSES.test.network, 'service');
+  assert.ok(!CLASSES.test.egress);
+  for (const [name, c] of Object.entries(CLASSES)) assert.ok(!(reachesService(c) && c.egress), name);
+});
+
+test('invariant 3: the class that reads service data cannot write anywhere a later call reads', () => {
   for (const [name, c] of Object.entries(CLASSES)) {
-    assert.ok(!(c.secrets !== 'none' && hasNetwork(c)), `${name} has secrets and network together`);
+    if (reachesService(c)) assert.ok(c.app !== 'write' && c.web !== 'write', name);
   }
 });
 
-test('a class that can see the secrets cannot write to shared storage', () => {
-  for (const [name, c] of Object.entries(CLASSES)) {
-    const writesShared = c.app === 'write' || c.web === 'write';
-    assert.ok(!(c.secrets !== 'none' && writesShared), `${name} has secrets and writable shared storage`);
-  }
+test('only classes that can reach third parties are marked as egress', () => {
+  for (const [name, c] of Object.entries(CLASSES)) assert.equal(!!c.egress, name === 'search' || name === 'install', name);
+  for (const [name, c] of Object.entries(CLASSES)) if (!c.egress && !reachesService(c)) assert.ok(!hasNetwork(c), name);
+});
+
+test('installs can reach the npm, yarn and Python registries', () => {
+  const req = buildCall({ command: 'pip install requests', mode: 'limited', ...disks, service }).request;
+  assert.deepEqual(req.network.egress.allow, INSTALL_REGISTRIES);
+  for (const host of ['registry.npmjs.org', 'registry.yarnpkg.com', 'pypi.org', 'files.pythonhosted.org']) assert.ok(INSTALL_REGISTRIES.includes(host), host);
+});
+
+test('the test call reaches only the service, with the key added by the egress rule', () => {
+  const { request } = buildCall({ command: 'node --test', mode: 'limited', ...disks, service });
+  assert.deepEqual(Object.keys(request.disks), ['app']);
+  assert.equal(request.disks.app.readOnly, true);
+  assert.deepEqual(request.network, { egress: { default: 'deny', allow: [{ target: service.host, transform: { headers: service.headers } }] } });
+  assert.ok(!request.command.includes('svc_test_key'), 'the key is not in the command');
+  // Without a service configured, the test call gets no network at all.
+  assert.deepEqual(buildCall({ command: 'node --test', mode: 'limited', ...disks }).request.network, { egress: { default: 'deny' } });
 });
 
 test('the request mounts only what the class is granted', () => {
-  const install = buildCall({ command: 'npm install', mode: 'limited', ...disks }).request;
+  const install = buildCall({ command: 'npm install', mode: 'limited', ...disks, service }).request;
   assert.deepEqual(Object.keys(install.disks), ['app']);
   assert.equal(install.disks.app.readOnly, undefined);
-  assert.deepEqual(install.network, { egress: { default: 'deny', allow: ['registry.npmjs.org'] } });
 
-  const tests = buildCall({ command: 'node --test', mode: 'limited', ...disks }).request;
-  assert.deepEqual(Object.keys(tests.disks).sort(), ['app', 'secrets']);
-  assert.equal(tests.disks.app.readOnly, true);
-  assert.equal(tests.disks.secrets.readOnly, true);
-  assert.deepEqual(tests.network, { egress: { default: 'deny' } });
-
-  const other = buildCall({ command: 'ls /mnt/archil/web', mode: 'limited', ...disks }).request;
+  const other = buildCall({ command: 'ls /mnt/archil/web', mode: 'limited', ...disks, service }).request;
   assert.deepEqual(Object.keys(other.disks).sort(), ['app', 'web']);
   assert.equal(other.disks.web.readOnly, true);
+  assert.deepEqual(other.network, { egress: { default: 'deny' } });
 
-  const open = buildCall({ command: 'npm install', mode: 'open', ...disks }).request;
-  assert.deepEqual(Object.keys(open.disks).sort(), ['app', 'secrets', 'web']);
+  for (const cmd of ['npm install', 'node --test', 'ls']) assert.ok(!buildCall({ command: cmd, mode: 'limited', ...disks, service }).request.disks.key, `${cmd}: no key disk under limits`);
+
+  const open = buildCall({ command: 'npm install', mode: 'open', ...disks, service }).request;
+  assert.deepEqual(Object.keys(open.disks).sort(), ['app', 'key', 'web']);
   assert.equal(open.network, undefined);
 });
 
 test('a search call mounts only the web results disk and reaches only the search provider', () => {
-  const { grants, request } = buildCall({ command: searchCommand('anything'), mode: 'limited', forcedClass: 'search', ...disks });
+  const { grants, request } = buildCall({ command: searchCommand('anything'), mode: 'limited', forcedClass: 'search', ...disks, service });
   assert.equal(grants.class, 'search');
   assert.deepEqual(Object.keys(request.disks), ['web']);
   assert.deepEqual(request.network, { egress: { default: 'deny', allow: ['api.keenable.ai'] } });
@@ -85,7 +108,7 @@ test('a search query is carried as data and cannot add shell text', () => {
 });
 
 test('a file write gets a writable workspace and nothing else', () => {
-  const { grants, request } = buildCall({ command: writeFileCommand('src/new.js', 'export const x = 1;\n'), mode: 'limited', forcedClass: 'edit', ...disks });
+  const { grants, request } = buildCall({ command: writeFileCommand('src/new.js', 'export const x = 1;\n'), mode: 'limited', forcedClass: 'edit', ...disks, service });
   assert.equal(grants.class, 'edit');
   assert.deepEqual(Object.keys(request.disks), ['app']);
   assert.equal(request.disks.app.readOnly, undefined);
@@ -102,8 +125,8 @@ test('file content and path are carried as data', () => {
   assert.ok(!command.includes('INJECTED'));
 });
 
-test('file writes cannot leave the workspace', () => {
-  for (const p of ['../secrets/config.json', '/etc/passwd', 'src/../../x', 'a\\b', '', 'node_modules/ms/index.js', 'src/./a.js', 'src//a.js', 'a b.js']) {
+test('file writes cannot leave the workspace or replace service.json', () => {
+  for (const p of ['../secrets/config.json', '/etc/passwd', 'src/../../x', 'a\\b', '', 'node_modules/ms/index.js', 'src/./a.js', 'src//a.js', 'a b.js', 'service.json']) {
     assert.ok(checkWorkspacePath(p), `should refuse: ${JSON.stringify(p)}`);
     assert.throws(() => writeFileCommand(p, 'x'));
   }

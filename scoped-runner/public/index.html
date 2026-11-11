@@ -140,7 +140,7 @@
   .call .res .x { color: var(--warn); font-weight: 600; } .call .res .e { color: var(--bad); font-weight: 600; }
   .chips { grid-column: 3 / 5; display: flex; gap: 5px; flex-wrap: wrap; }
   @media (max-width: 600px) { .call .label { grid-column: 3 / 5; white-space: normal; overflow-wrap: anywhere; } .call .res { grid-column: 3 / 5; text-align: left; } }
-  .chip { font: 11px/1 var(--mono); padding: 3px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--faint); white-space: nowrap; }
+  .chip { font: 11px/1.3 var(--mono); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--faint); max-width: 100%; overflow-wrap: anywhere; }
   .chip.on { color: var(--ink); background: var(--panel-2); }
   .chip.sens { color: var(--c-test); border-color: currentColor; }
   .chip.netc { color: var(--c-search); border-color: currentColor; }
@@ -157,7 +157,10 @@
   .checks { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
   .checks li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
   .mark { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 12px; color: #fff; }
-  .mark.ok { background: var(--good); } .mark.no { background: var(--bad); }
+  .mark.ok { background: var(--good); } .mark.no { background: var(--bad); } .mark.warn { background: var(--warn); }
+  table.matrix .dns-open { color: var(--warn); font-weight: 600; }
+  .rej code { margin: 0 6px; }
+  .rej div { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
   @media (prefers-color-scheme: dark) { .mark { color: #0c1016; } }
   .checks .d { color: var(--muted); font-size: 12.5px; word-break: break-word; }
   .final { white-space: pre-wrap; font-size: 13.5px; margin: 0; }
@@ -209,7 +212,7 @@
     <section class="card" aria-labelledby="policyTitle">
       <h2 id="policyTitle">Access classes</h2>
       <table class="policy" id="policy"></table>
-      <p class="hint">Fixed rules sort every tool call into a class; the model never chooses. A command that chains, pipes or redirects always gets <b>other</b>.</p>
+      <p class="hint">Fixed rules sort every tool call into a class; the model never chooses. A command that chains, pipes or redirects always gets <b>other</b>. The API key is never inside a call: for <b>test</b>, Archil adds it to requests to your service on the way out.</p>
     </section>
 
     <section class="card" aria-labelledby="runsTitle">
@@ -247,9 +250,6 @@
   const badge = (cls) => h('span', { class: `badge cls-${cls}` }, cls === 'open' ? 'no limits' : cls);
   const secs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
   const netHosts = (n) => (n?.allow ?? []).map((x) => (typeof x === 'string' ? x : x.target));
-  const hasNet = (g) => g.network === null || netHosts(g.network).length > 0;
-  const secretsAndNet = (g) => g.secrets !== 'none' && hasNet(g);
-  const secretsAndWrite = (g) => g.secrets !== 'none' && (g.app === 'write' || g.web === 'write');
   const access = (v) => (v === 'write' ? 'rw' : v === 'read' ? 'ro' : '—');
   const ago = (t) => {
     if (!t) return '';
@@ -274,6 +274,7 @@
     if (config.fake) env.append(h('span', { class: 'pill' }, 'Archil ', h('b', null, 'stand-in')));
     else env.append(h('span', { class: `pill${config.archil ? '' : ' bad'}` }, config.archil ? 'Archil key ' : 'No Archil key', config.archil ? h('b', null, 'set') : null));
     env.append(h('span', { class: `pill${config.modelKey ? '' : ' warn'}` }, 'Model ', h('b', null, config.model)));
+    env.append(h('span', { class: `pill${config.serviceProblem ? ' bad' : ''}`, title: config.serviceProblem || 'The sample project\'s own API, in a small Archil sandbox. Each run gets its own key, added by Archil at the network edge.' }, 'Service ', h('b', null, config.fake ? 'stand-in' : config.service ? 'running' : config.serviceProblem ? 'failed' : 'starting')));
     env.append(h('span', { class: 'pill' }, 'Image ', h('b', null, config.image)));
     if (config.fake) { $('banner').hidden = false; $('banner').textContent = 'Fake mode: stand-ins for Archil and the model. Nothing leaves this machine, and steps are scripted. Use it to try the dashboard; start without --fake for real runs.'; }
     else if (!config.archil) { $('banner').hidden = false; $('banner').textContent = config.archilProblem || 'Archil is not configured.'; }
@@ -328,18 +329,21 @@
     }
   }
 
+  const netText = (n) => (n === null ? 'open' : n === 'service' ? 'your service only' : netHosts(n).join(', ') || 'none');
+  const keyText = (k) => (k === 'edge' ? 'at edge' : k === 'inside' ? 'inside' : '—');
+
   function renderPolicy() {
     const t = $('policy');
-    t.append(h('tr', null, h('th', null, 'Class'), h('th', null, 'Project'), h('th', null, 'Secrets'), h('th', null, 'Web'), h('th', null, 'Network')));
+    t.append(h('tr', null, h('th', null, 'Class'), h('th', null, 'Project'), h('th', null, 'Web'), h('th', null, 'API key'), h('th', null, 'Network')));
     for (const name of CLASS_ORDER) {
       const c = config.classes[name];
       if (!c) continue;
-      const net = c.network === null ? 'open' : netHosts(c.network).join(', ') || 'none';
+      const net = netText(c.network);
       t.append(h('tr', { class: name === 'open' ? 'sep' : null, title: c.describe },
         h('td', null, badge(name)),
         h('td', { class: c.app === 'none' ? 'no' : 'yes' }, access(c.app)),
-        h('td', { class: c.secrets === 'none' ? 'no' : 'yes' }, access(c.secrets)),
         h('td', { class: c.web === 'none' ? 'no' : 'yes' }, access(c.web)),
+        h('td', { class: c.key === 'none' ? 'no' : 'yes' }, keyText(c.key)),
         h('td', { class: `net ${net === 'none' ? 'no' : 'yes'}` }, net)));
     }
   }
@@ -419,21 +423,26 @@
   function handle(ev) {
     const { s, ui } = current;
     switch (ev.type) {
-      case 'start': s.start = ev; (ev.kind === 'matrix' ? shellMatrix : shellAgent)(ev); activity(ev.kind === 'matrix' ? 'Creating disks…' : 'Creating this run’s disks and uploading the project…'); break;
+      case 'start': s.start = ev; (ev.kind === 'matrix' ? shellMatrix : shellAgent)(ev); activity(ev.kind === 'matrix' ? 'Creating disks and registering a key for this run…' : 'Creating this run’s disks, registering its key and uploading the project…'); break;
       case 'disks': note(`Disks for this run: ${ev.names.join(', ')}`); break;
       case 'status': activity(ev.text); break;
       case 'say': ui.timeline?.append(h('li', { class: 'say' }, `Claude: ${ev.text}`)); break;
-      case 'rejected': ui.timeline?.append(h('li', { class: 'rej' }, `Refused before any call was made: ${ev.label} — ${ev.problem}`)); break;
+      case 'rejected':
+        if (ev.refused) { s.refused = (s.refused || 0) + 1; updateTiles(); }
+        ui.timeline?.append(h('li', { class: 'rej' }, ev.class ? badge(ev.class) : null, ' ', h('code', null, ev.label), h('div', null, ev.refused ? ev.problem : `Refused before any call was made: ${ev.problem}`)));
+        break;
       case 'call': s.calls.push(ev.call); addCall(ev.call); updateTiles(); activity(s.start?.mode === 'live' ? 'Claude is choosing the next step…' : 'Next scripted step…'); break;
       case 'agent-done': agentDone(ev); break;
       case 'check': s.checks.push(ev.check); addCheck(ev.check); break;
+      case 'gap': addGap(ev.text); break;
       case 'summary': s.summary = ev.summary; updateTiles(); break;
-      case 'matrix-row': s.rows.push(ev.row); addRow(ev.row); break;
+      case 'measure': s.rows = ev.rows; showMeasured(ev.rows); updateTiles(); break;
+      case 'matrix-row': s.rows.push(ev.row); ui.addRow(ev.row); break;
       case 'error': note(`Stopped: ${ev.text}`, true); break;
       case 'cleanup':
         if (ev.recovered) {
           s.recovered = !(ev.failed ?? []).length;
-          if (ev.deleted?.length) note(`When the server restarted, it deleted the ${ev.deleted.length} disk(s) this run had left.`);
+          if (ev.deleted?.length) note(`When the server restarted, it deleted the ${ev.deleted.length} disk(s) this run had left, and revoked its key.`);
           if (ev.missing?.length) note(`${ev.missing.length} disk(s) from this run were already gone.`);
         } else {
           if (ev.kept?.length) note(`Kept disks: ${ev.kept.join(', ')}`);
@@ -472,53 +481,94 @@
 
   function panel(title, sub, ...kids) { return h('section', { class: 'panel' }, h('h3', null, title), sub ? h('p', { class: 'sub' }, sub) : null, ...kids); }
 
+  // The measured table, shared by the access matrix and the end of every agent run.
+  function measureTable() {
+    const tbody = h('tbody');
+    const cell = (v, yesWord, labels = {}) => {
+      if (v == null) return h('td', { class: 'cell-no' }, '?');
+      const yes = v === yesWord;
+      return h('td', { class: yes ? 'cell-yes' : 'cell-no' }, yes ? (labels.yes ?? 'yes') : ['no', h('small', null, labels[v] ?? v)]);
+    };
+    const add = (r) => {
+      const danger = r.keyInside || (r.service === 'authenticated' && r.outside === 'reachable');
+      tbody.append(h('tr', { class: danger ? 'danger' : null },
+        h('td', null, badge(r.class)),
+        h('td', { class: r.keyInside ? 'cell-yes' : 'cell-no' }, r.measured ? (r.keyInside ? 'yes' : 'no') : '?'),
+        cell(r.service, 'authenticated', { 'refused (HTTP 401)': 'refused: no key', blocked: 'blocked' }),
+        cell(r.outside, 'reachable'),
+        cell(r.workspaceWrite, 'allowed'),
+        cell(r.webWrite, 'allowed'),
+        h('td', { class: r.dns === 'answered' ? 'dns-open' : 'cell-no' }, r.dns ?? '?'),
+        r.error ? h('td', { class: 'back' }, `probe failed: ${r.error}`) : null));
+    };
+    const table = h('div', { class: 'matrix-wrap' }, h('table', { class: 'matrix' },
+      h('thead', null, h('tr', null, h('th', null, 'Class'), h('th', null, 'API key inside the call'), h('th', null, 'Reach your service'), h('th', null, 'Reach an outside host'), h('th', null, 'Write the project'), h('th', null, 'Write web results'), h('th', null, 'DNS lookups'))),
+      tbody));
+    return { table, add };
+  }
+
   function shellAgent(ev) {
     const ui = current.ui;
-    const tile = (label) => { const v = h('div', { class: 'v' }, '0'); const t = h('div', { class: 'tile' }, v, h('div', { class: 'l' }, label)); return { t, v }; };
+    const tile = (label, v = '0') => { const val = h('div', { class: 'v' }, v); const t = h('div', { class: 'tile' }, val, h('div', { class: 'l' }, label)); return { t, v: val }; };
     ui.tCalls = tile('Tool calls, one microVM each');
-    ui.tNet = tile('Held the secrets and network access');
-    ui.tWrite = tile('Held the secrets and a writable folder');
+    ui.tKey = tile('Classes found holding the API key (measured after the run)', '…');
+    ui.tRefused = tile('Outbound calls refused after Claude saw service data');
     ui.tRed = tile('Secret values removed from output');
     ui.bar = h('div', { class: 'bar' });
     ui.legend = h('div', { class: 'legend' });
     ui.timeline = h('ol', { class: 'timeline' });
     ui.final = h('section', { class: 'panel', hidden: true });
+    ui.measured = h('section', { class: 'panel', hidden: true });
     ui.checks = h('ul', { class: 'checks' });
     ui.notes = h('div', { class: 'notes' });
     $('view').replaceChildren(
       header(ev, ev.task?.title ?? 'Agent run'),
-      h('div', { class: 'tiles' }, ui.tCalls.t, ui.tNet.t, ui.tWrite.t, ui.tRed.t),
+      h('div', { class: 'tiles' }, ui.tCalls.t, ui.tKey.t, ui.tRefused.t, ui.tRed.t),
       panel('Calls', 'Each row is one Archil call in a fresh microVM, with only what its class grants. Click a row for its output (already scrubbed).', ui.bar, ui.legend, ui.timeline),
       ui.final,
-      panel('Independent checks', 'Re-run on Archil under the same limits after the agent stops. They do not take the agent’s word for anything.', ui.checks),
+      ui.measured,
+      panel('Independent checks', 'Re-run on Archil after the agent stops, and measured rather than read from the policy. They do not take the agent’s word for anything.', ui.checks),
       ui.notes);
+  }
+
+  function showMeasured(rows) {
+    const ui = current.ui;
+    const { table, add } = measureTable();
+    rows.forEach(add);
+    ui.measured.hidden = false;
+    ui.measured.replaceChildren(h('h3', null, 'Measured access'), h('p', { class: 'sub' }, 'After the agent finished, one harmless probe ran in each class: it looked for the API key in everything it could see, called your service, fetched example.com (on no allowlist), tried to write each folder and resolved a name.'), table);
   }
 
   function shellMatrix(ev) {
     const ui = current.ui;
-    ui.tbody = h('tbody');
+    const { table, add } = measureTable();
+    ui.addRow = add;
     ui.checks = h('ul', { class: 'checks' });
     ui.notes = h('div', { class: 'notes' });
     $('view').replaceChildren(
       header(ev, 'Access matrix'),
-      panel('What each class could actually reach', 'Measured, not declared: the same harmless probe ran once per class. It reads a throwaway canary secret, tries to write each folder, and fetches example.com, which is on no allowlist.',
-        h('div', { class: 'matrix-wrap' }, h('table', { class: 'matrix' },
-          h('thead', null, h('tr', null, h('th', null, 'Class'), h('th', null, 'Read the secret'), h('th', null, 'Write the project'), h('th', null, 'Write web results'), h('th', null, 'Reach an outside host'), h('th', null, 'What came back to the host'))),
-          ui.tbody))),
+      panel('What each class could actually reach', 'Measured, not declared: the same harmless probe ran once per class, plus once with no limits, the way a conventional sandbox runs everything with the key on hand.', table),
       panel('Checks', null, ui.checks),
       ui.notes);
   }
 
   function chipsFor(g) {
     const c = (text, cls) => h('span', { class: `chip ${cls}` }, text);
-    const hosts = g.network === null ? null : netHosts(g.network);
+    const hosts = g.network === null || g.network === 'service' ? [] : netHosts(g.network);
     return [
       c(`project ${access(g.app)}`, g.app === 'none' ? '' : g.app === 'write' ? 'on red' : 'on'),
-      c(`secrets ${access(g.secrets)}`, g.secrets === 'none' ? '' : 'sens'),
       c(`web ${access(g.web)}`, g.web === 'none' ? '' : g.web === 'write' ? 'on red' : 'on'),
-      g.network === null ? c('network open', 'danger') : hosts.length ? c(`net → ${hosts.join(', ')}`, 'netc') : c('network none', ''),
+      g.key === 'edge' ? c('key added at the edge', 'sens') : g.key === 'inside' ? c('key inside', 'danger') : c('key —', ''),
+      g.network === null ? c('network open', 'danger') : g.network === 'service' ? c('net → your service only', 'sens') : hosts.length ? netChip(hosts) : c('network none', ''),
     ];
   }
+
+  function netChip(hosts) {
+    const text = hosts.length > 2 ? `net → ${hosts[0]} +${hosts.length - 1} more` : `net → ${hosts.join(', ')}`;
+    return h('span', { class: 'chip netc', title: hosts.join(', ') }, text);
+  }
+
+  const safeUrl = (u) => (/^https?:\/\//i.test(String(u)) ? String(u) : null);
 
   function addCall(c) {
     const ui = current.ui;
@@ -527,11 +577,11 @@
     else if (c.tool === 'search') res = h('span', null, c.search?.status === 200 ? `${c.search.count} results` : h('span', { class: 'x' }, 'search failed'), ` · ${secs(c.wallMs)}`);
     else res = h('span', null, c.exitCode === 0 ? 'exit 0' : h('span', { class: 'x' }, `exit ${c.exitCode}`), ` · ${secs(c.wallMs)}`);
     const why = [];
-    if (/\/mnt\/archil\/secrets/.test(c.label) && c.grants.secrets === 'none') why.push('The secrets disk is not mounted for this class, so the path does not exist in this call.');
-    if (c.redactions) why.push(`${c.redactions} occurrence(s) of the secret value were removed before the output reached the model.`);
+    if (c.grants.key === 'edge') why.push('This call could reach only your service. Archil added the API key to those requests on the way out, so the call never held it.');
+    if (c.redactions) why.push(`${c.redactions} occurrence(s) of a secret value were removed before the output reached the model.`);
     const body = [];
     if (why.length) body.push(h('p', { class: 'why' }, why.join(' ')));
-    if (c.search?.results?.length) body.push(h('ol', { class: 'results' }, c.search.results.map((r) => h('li', null, r.title, ' — ', h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer' }, r.url)))));
+    if (c.search?.results?.length) body.push(h('ol', { class: 'results' }, c.search.results.map((r) => h('li', null, r.title, ' — ', safeUrl(r.url) ? h('a', { href: safeUrl(r.url), target: '_blank', rel: 'noopener noreferrer' }, r.url) : h('code', null, String(r.url))))));
     const out = [c.output, c.stderr ? `stderr:\n${c.stderr}` : '', c.error ?? ''].filter(Boolean).join('\n');
     if (out) body.push(h('pre', { class: 'out' }, out));
     if (!body.length) body.push(h('p', { class: 'why' }, '(no output)'));
@@ -550,13 +600,15 @@
     const { s, ui } = current;
     if (!ui.tCalls) return;
     const calls = s.calls;
-    const net = calls.filter((c) => secretsAndNet(c.grants)).length;
-    const wr = calls.filter((c) => secretsAndWrite(c.grants)).length;
     const red = calls.reduce((n, c) => n + (c.redactions || 0), 0);
     ui.tCalls.v.textContent = calls.length;
-    ui.tNet.v.textContent = net; ui.tNet.t.className = `tile ${net ? 'bad' : calls.length ? 'good' : ''}`;
-    ui.tWrite.v.textContent = wr; ui.tWrite.t.className = `tile ${wr ? 'bad' : calls.length ? 'good' : ''}`;
+    ui.tRefused.v.textContent = s.refused || 0;
     ui.tRed.v.textContent = red;
+    if (s.rows?.length) {
+      const holding = s.rows.filter((r) => r.class !== 'open' && r.keyInside).length;
+      ui.tKey.v.textContent = holding;
+      ui.tKey.t.className = `tile ${holding ? 'bad' : 'good'}`;
+    }
     const counts = {};
     for (const c of calls) counts[c.class] = (counts[c.class] || 0) + 1;
     ui.bar.replaceChildren(...CLASS_ORDER.filter((k) => counts[k]).map((k) => h('span', { style: `width:${(100 * counts[k]) / calls.length}%;background:${CLASS_COLOR[k]}`, title: `${k}: ${counts[k]}` })));
@@ -566,27 +618,15 @@
   function agentDone(ev) {
     const ui = current.ui;
     ui.final.hidden = false;
-    ui.final.replaceChildren(h('h3', null, 'The agent’s own summary'), h('p', { class: 'sub' }, `Stopped after ${ev.calls} calls in ${ev.seconds} s: ${ev.ended}.`), ev.finalText ? h('p', { class: 'final' }, ev.finalText) : null);
+    ui.final.replaceChildren(h('h3', null, 'The agent’s own summary'), h('p', { class: 'sub' }, `Stopped after ${ev.calls} calls in ${ev.seconds} s${ev.refused ? `, with ${ev.refused} refused` : ''}: ${ev.ended}.`), ev.finalText ? h('p', { class: 'final' }, ev.finalText) : null);
   }
 
   function addCheck(c) {
     current.ui.checks?.append(h('li', null, h('span', { class: `mark ${c.ok ? 'ok' : 'no'}`, 'aria-label': c.ok ? 'passed' : 'failed' }, c.ok ? '✓' : '✗'), h('div', null, h('div', null, c.label), h('div', { class: 'd' }, c.detail))));
   }
 
-  function addRow(r) {
-    const cell = (v, yesWord) => {
-      if (v == null) return h('td', { class: 'cell-no' }, '?');
-      const yes = v === yesWord;
-      return h('td', { class: yes ? 'cell-yes' : 'cell-no' }, yes ? 'yes' : ['no', h('small', null, v)]);
-    };
-    const danger = r.secrets === 'readable' && r.outside === 'reachable';
-    current.ui.tbody.append(h('tr', { class: danger ? 'danger' : null },
-      h('td', null, badge(r.class)),
-      cell(r.secrets, 'readable'),
-      cell(r.workspaceWrite, 'allowed'),
-      cell(r.webWrite, 'allowed'),
-      cell(r.outside, 'reachable'),
-      h('td', { class: 'back' }, r.error ? `probe failed: ${r.error}` : r.secretShown ?? '—', r.redactions ? h('span', { class: 'tag' }, `${r.redactions} redacted`) : null)));
+  function addGap(text) {
+    current.ui.checks?.append(h('li', null, h('span', { class: 'mark warn', 'aria-label': 'known gap' }, '!'), h('div', null, h('div', null, 'Known platform gap: DNS'), h('div', { class: 'd' }, text))));
   }
 
   function activity(text) {
@@ -616,11 +656,11 @@
     renderRuns();
     $('view').replaceChildren(h('div', { class: 'intro' },
       h('h2', null, 'Compute per tool call makes access per tool call possible.'),
-      h('p', null, 'An Archil agent has no sandbox: each tool call is a fresh microVM with only the disks it mounts. So each call can also get only the folders and network it needs. The step that downloads third-party code never sees the secrets, and the step that can read the secrets has no network and nothing it can write.'),
+      h('p', null, 'An Archil agent has no sandbox: each tool call is a fresh microVM with only the disks it mounts. So each call can also get only the folders and network it needs. The API key is never inside any call: when the tests call your service, Archil adds the key to those requests on the way out. The step that downloads third-party code cannot reach your service, and once Claude has seen your service’s data, nothing more can go out to third parties.'),
       h('div', { class: 'flow' },
         h('div', null, h('b', null, '1. Claude picks a tool call'), h('span', null, 'bash, web_search or write_file, on a small Node.js project.')),
         h('div', null, h('b', null, '2. Fixed rules pick its class'), h('span', null, 'Install, test, edit, search or other. The model never chooses its own access.')),
-        h('div', null, h('b', null, '3. One microVM, scoped mounts'), h('span', null, 'Only that class’s disks and network rule. Output is scrubbed of secret values on the way back.'))),
+        h('div', null, h('b', null, '3. One microVM, scoped access'), h('span', null, 'Only that class’s disks and network rule. The key is added at the network edge, never handed to the call.'))),
       h('p', { class: 'hint', style: 'margin-top:16px' }, 'Start a run on the left, or pick an earlier one.')));
   }
 

@@ -1,57 +1,59 @@
 // Per-call access policy.
 //
 // Every tool call an agent makes is sorted into a class by fixed rules (never by a model),
-// and each class is granted only the folders and network it needs.
+// and each class is granted only the folders and network it needs:
 //
 //   app:      'write' | 'read' | 'none'   the project workspace
-//   secrets:  'read'  | 'none'            configuration the tests need
-//   web:      'write' | 'read' | 'none'   where web search results are kept
-//   network:  an egress policy, or null for an open network
+//   web:      'write' | 'read' | 'none'   where saved web search results are kept
+//   key:      'none' | 'edge' | 'inside'  the project service's API key.
+//             'edge' means Archil's egress proxy adds it to requests to the project's
+//             service; the call itself never holds it. 'inside' is what a conventional
+//             sandbox does (only the no-limits baseline).
+//   network:  'service' (only the project's own service), an egress policy, or null (open)
+//   egress:   true if the class can send data to third parties outside the project
 //
-// Two properties the classes are designed to keep (policy.test.mjs checks both):
-//   1. No class has the secrets together with any network access.
-//   2. A class that can see the secrets cannot write to any storage a later call will read.
+// What the classes are designed to keep (policy.test.mjs checks each):
+//   1. No class holds the API key inside the call.
+//   2. Only the test class can reach the project's service, and it can reach nothing else.
+//   3. The class that reads service data cannot write anywhere a later call reads.
+// And across calls (loop.mjs): once the model has seen output from a call that reached the
+// service, calls that can send data to third parties are refused for the rest of the run.
+
+export const INSTALL_REGISTRIES = ['registry.npmjs.org', 'registry.yarnpkg.com', 'pypi.org', 'files.pythonhosted.org'];
 
 export const CLASSES = {
   search: {
     describe: 'Search the web',
-    app: 'none',
-    secrets: 'none',
-    web: 'write',
+    app: 'none', web: 'write', key: 'none',
     network: { default: 'deny', allow: ['api.keenable.ai'] },
+    egress: true,
   },
   install: {
     describe: 'Fetch dependencies',
-    app: 'write',
-    secrets: 'none',
-    web: 'none',
-    network: { default: 'deny', allow: ['registry.npmjs.org'] },
+    app: 'write', web: 'none', key: 'none',
+    network: { default: 'deny', allow: INSTALL_REGISTRIES },
+    egress: true,
   },
   edit: {
     describe: 'Write a project file',
-    app: 'write',
-    secrets: 'none',
-    web: 'none',
+    app: 'write', web: 'none', key: 'none',
     network: { default: 'deny' },
   },
   test: {
     describe: 'Run the test suite',
-    app: 'read',
-    secrets: 'read',
-    web: 'none',
-    network: { default: 'deny' },
+    app: 'read', web: 'none', key: 'edge',
+    network: 'service',
   },
   other: {
     describe: 'Anything else',
-    app: 'read',
-    secrets: 'none',
-    web: 'read',
+    app: 'read', web: 'read', key: 'none',
     network: { default: 'deny' },
   },
 };
 
-// What a conventional sandbox gives every command: everything, all the time.
-export const OPEN = { describe: 'No limits', app: 'write', secrets: 'read', web: 'write', network: null };
+// What a conventional sandbox gives every command: everything, all the time, with the key
+// on hand. Used only as the comparison baseline.
+export const OPEN = { describe: 'No limits (a conventional sandbox)', app: 'write', web: 'write', key: 'inside', network: null, egress: true };
 
 // Rules for bash commands. Web search and file writing are separate tools with their own
 // fixed classes, so a bash command can never talk its way into the search or edit class.
@@ -78,11 +80,16 @@ export function grantsFor(command, mode = 'limited', forcedClass) {
   return { class: name, ...CLASSES[name] };
 }
 
-export function hasNetwork(grants) {
-  return grants.network === null || (grants.network.allow?.length ?? 0) > 0;
+export const reachesService = (g) => g.network === 'service' || g.network === null;
+export const hasNetwork = (g) => g.network === null || g.network === 'service' || (g.network?.allow?.length ?? 0) > 0;
+
+export function describeNetwork(network) {
+  if (network === null) return 'open';
+  if (network === 'service') return "only the project's service (key added at the edge)";
+  return network.allow?.length ? `only ${network.allow.map((a) => (typeof a === 'string' ? a : a.target)).join(', ')}` : 'none';
 }
 
 export function describeGrants(g) {
-  const net = g.network === null ? 'open' : g.network.allow?.length ? `only ${g.network.allow.join(', ')}` : 'none';
-  return `workspace: ${g.app}, secrets: ${g.secrets}, web results: ${g.web}, network: ${net}`;
+  const key = g.key === 'edge' ? 'added at the edge, never inside' : g.key === 'inside' ? 'INSIDE the call' : 'none';
+  return `workspace: ${g.app}, web results: ${g.web}, API key: ${key}, network: ${describeNetwork(g.network)}`;
 }

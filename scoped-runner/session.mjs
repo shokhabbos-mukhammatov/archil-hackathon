@@ -1,21 +1,21 @@
 // One complete, self-contained run, as used by both the command line and the web server.
 //
-//   runSession  creates three disks for this run alone (workspace, secrets, web results),
-//               lets the agent work, checks the result itself, then deletes the disks.
-//   runMatrix   measures what each access class can actually reach, with one harmless
-//               probe per class and one with no limits for comparison.
+//   runSession  creates two disks for this run alone (workspace, web results), registers a
+//               fresh API key for the run with the project's service, lets the agent work,
+//               checks the result itself, measures what every class could actually reach,
+//               then revokes the key and deletes the disks.
+//   runMatrix   the measurement alone, with the no-limits baseline added for comparison.
 //
 // Every run reports through `emit(event)` and also appends each event to
 // runs/session-<tag>.jsonl, so a finished run can be shown again later.
-// The secret is a throwaway canary made fresh for each run.
 
 import { readdirSync, readFileSync, statSync, mkdirSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
-import { CLASSES, hasNetwork } from './policy.mjs';
-import { runCall, PROBE, parseProbe } from './runner.mjs';
+import { CLASSES } from './policy.mjs';
+import { runCall, probeCommand, parseProbe } from './runner.mjs';
 import { runAgent, rehearsalClient, TASKS, DEFAULT_MODEL } from './loop.mjs';
+import { newServiceKey } from './service.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const IMAGE = process.env.DEMO_IMAGE ?? 'node:22-slim';
@@ -23,6 +23,7 @@ export const DEFAULT_LOG_DIR = path.join(here, 'runs');
 export const newTag = () => Math.random().toString(36).slice(2, 8);
 
 const tail = (s, n = 8) => String(s ?? '').trim().split('\n').slice(-n).join('\n');
+const normUrl = (u) => String(u).replace(/[.,;:]+$/, '').replace(/\/$/, '');
 
 // The line that says why a command failed: the first thrown error (TAP output prefixes
 // a crashed test file's stderr with "# "), else the first failing test. Paths after
@@ -32,7 +33,6 @@ export function failureReason(...texts) {
   const line = lines.find((l) => /^[A-Za-z]*Error\b(?: \[[A-Z_]+\])?:/.test(l)) ?? lines.find((l) => /^not ok \d+/.test(l));
   return line ? line.replace(/ imported from \S+/, '').slice(0, 200) : null;
 }
-const normUrl = (u) => String(u).replace(/[.,;:]+$/, '').replace(/\/$/, '');
 
 // Errors that carry an HTTP status come from Archil or from the model call, and loop.mjs
 // marks the model's with `service`. Naming the service matters: .env holds two keys.
@@ -65,15 +65,15 @@ function makeEmitter(tag, logDir, emit) {
   return { file, send };
 }
 
-async function makeDisks(archil, prefix, labels, send) {
-  const created = [];
+// Disks go into the caller's `created` list as each one is made, so a failure partway
+// through still leaves every created disk on the list for cleanup.
+async function makeDisks(archil, prefix, labels, send, created) {
   try {
     for (const label of labels) {
       const { disk } = await archil.disks.create({ name: `${prefix}-${label}` });
       created.push(disk);
     }
   } finally {
-    // Report whatever was created, even on failure, so cleanup is visible.
     if (created.length) send({ type: 'disks', names: created.map((d) => d.name) });
   }
   return created;
@@ -90,143 +90,208 @@ async function deleteDisks(created, keep, send) {
   send({ type: 'cleanup', deleted, failed });
 }
 
-const canaryConfig = () => ({ serviceName: 'billing', apiKey: `CANARY-${randomBytes(9).toString('hex')}` });
+// ---------------------------------------------------------------------------------------
+// Measurement: one harmless probe per class.
+// ---------------------------------------------------------------------------------------
+export async function probeClasses({ archil, base, classes, serviceUrl, onRow = () => {} }) {
+  const rows = [];
+  for (const name of classes) {
+    const run = await runCall(archil, { ...base, mode: name === 'open' ? 'open' : 'limited', forcedClass: name === 'open' ? undefined : name, command: probeCommand(serviceUrl) });
+    const p = parseProbe(run.stdout);
+    const row = {
+      class: name, grants: run.grants, measured: !!p,
+      // The probe prints its whole environment and any key file; the scrubber counts the key.
+      keyInside: (run.redactions ?? 0) > 0 || p?.keyFile === 'readable',
+      service: p?.service ?? null, outside: p?.outside ?? null,
+      workspaceWrite: p?.workspaceWrite ?? null, webWrite: p?.webWrite ?? null, dns: p?.dns ?? null,
+      wallMs: run.wallMs, error: p ? null : (run.error ?? failureReason(run.stderr, run.stdout) ?? tail(run.stderr || run.stdout, 2)),
+    };
+    rows.push(row);
+    onRow(row);
+  }
+  return rows;
+}
 
-export function accessSummary(calls) {
-  const byClass = {};
-  for (const c of calls) byClass[c.class] = (byClass[c.class] ?? 0) + 1;
+export function judgeRows(rows) {
+  const limited = rows.filter((r) => r.class !== 'open');
+  const authed = (r) => r.service === 'authenticated';
+  const open = rows.find((r) => r.class === 'open');
   return {
-    byClass,
-    secretsWithNetwork: calls.filter((c) => c.grants.secrets !== 'none' && hasNetwork(c.grants)).length,
-    secretsWithWrite: calls.filter((c) => c.grants.secrets !== 'none' && (c.grants.app === 'write' || c.grants.web === 'write')).length,
-    redactions: calls.reduce((n, c) => n + (c.redactions ?? 0), 0),
+    allMeasured: rows.every((r) => r.measured),
+    keyInside: limited.filter((r) => r.keyInside).map((r) => r.class),
+    serviceClasses: limited.filter(authed).map((r) => r.class),
+    serviceAndOutside: limited.filter((r) => authed(r) && r.outside === 'reachable').map((r) => r.class),
+    serviceAndWrite: limited.filter((r) => authed(r) && (r.workspaceWrite === 'allowed' || r.webWrite === 'allowed')).map((r) => r.class),
+    dnsAnswered: rows.filter((r) => r.dns === 'answered').map((r) => r.class),
+    baseline: open ? { keyInside: open.keyInside, service: authed(open), outside: open.outside === 'reachable' } : null,
   };
 }
 
-// Checks that do not take the agent's word for anything: they re-run things on Archil,
-// under the same limits, and look at the files directly.
-async function independentChecks({ archil, base, calls, task, send }) {
+const list = (xs) => (xs.length ? xs.join(', ') : 'none');
+
+function measuredChecks(j, rowsCount) {
+  return [
+    { id: 'measured', label: 'Every probe ran and reported', ok: j.allMeasured, detail: `${rowsCount} probes` },
+    { id: 'key', label: 'The API key was not inside any call (measured in every class)', ok: j.keyInside.length === 0, detail: `classes holding it: ${list(j.keyInside)}` },
+    { id: 'service', label: "Only the test class could reach the project's service, and it could reach nothing else", ok: j.serviceClasses.join() === 'test' && j.serviceAndOutside.length === 0, detail: `reached the service: ${list(j.serviceClasses)}; also reached an outside host: ${list(j.serviceAndOutside)}` },
+    { id: 'service-write', label: 'The class that reads service data could not write anywhere a later call reads', ok: j.serviceAndWrite.length === 0, detail: `could write: ${list(j.serviceAndWrite)}` },
+  ];
+}
+
+function dnsGap(j, total) {
+  if (!j.dnsAnswered.length) return null;
+  return `DNS lookups were answered in ${j.dnsAnswered.length} of ${total} classes, even under a deny-all rule (Archil's resolvers are reachable from every call). Anything inside a call could leave that way: project code and service responses, but not the API key, which is never inside. This is an open question for Archil.`;
+}
+
+// ---------------------------------------------------------------------------------------
+// Checks that do not take the agent's word for anything.
+// ---------------------------------------------------------------------------------------
+function originalTestsCommand() {
+  const original = readFileSync(path.join(here, 'sample-app', 'test', 'greet.test.js'), 'utf8')
+    .replace("from '../src/greet.js'", "from '/mnt/archil/app/src/greet.js'")
+    .replace("new URL('../service.json', import.meta.url)", "'/mnt/archil/app/service.json'");
+  const b64 = Buffer.from(original, 'utf8').toString('base64');
+  return `node -e 'const fs = require("fs"); fs.mkdirSync("/tmp/orig", { recursive: true }); fs.writeFileSync("/tmp/orig/original.test.mjs", Buffer.from(process.argv[1], "base64"))' ${b64} && node --test /tmp/orig/original.test.mjs`;
+}
+
+async function independentChecks({ archil, base, calls, task, serviceUrl, send }) {
   const checks = [];
   let archilCalls = 0;
-  const add = (id, label, ok, detail) => { const c = { id, label, ok: !!ok, detail }; checks.push(c); send({ type: 'check', check: c }); };
-  const call = async (command) => { archilCalls++; return runCall(archil, { ...base, command }); };
+  const add = (c) => { checks.push(c); send({ type: 'check', check: c }); };
+  const call = async (command, forcedClass) => { archilCalls++; return runCall(archil, { ...base, command, forcedClass }); };
+  const counts = (r) => [/(?:#|ℹ)\s*pass (\d+)/.exec(r.stdout)?.[1], /(?:#|ℹ)\s*fail (\d+)/.exec(r.stdout)?.[1]];
+  const testDetail = (r) => { const [pass, fail] = counts(r); return r.ok ? `${pass ?? '?'} passed, ${fail ?? 0} failed` : r.error ?? `${failureReason(r.stdout, r.stderr) ?? 'failed'} (${pass ?? '?'} passed, ${fail ?? '?'} failed)`; };
 
   const suite = await call('node --test');
-  const pass = /(?:#|ℹ)\s*pass (\d+)/.exec(suite.stdout)?.[1];
-  const fail = /(?:#|ℹ)\s*fail (\d+)/.exec(suite.stdout)?.[1];
-  add('suite', 'The whole test suite passes when re-run independently', suite.ok,
-    suite.ok ? `${pass ?? '?'} passed, ${fail ?? 0} failed`
-      : suite.error ?? `${failureReason(suite.stdout, suite.stderr) ?? 'the suite failed'} (${pass ?? '?'} passed, ${fail ?? '?'} failed)`);
+  add({ id: 'suite', label: 'The whole test suite passes when re-run independently', ok: suite.ok, detail: testDetail(suite) });
 
   if (task.checks === 'longform') {
+    const original = await call(originalTestsCommand(), 'test');
+    add({ id: 'original', label: "The project's original tests still pass against the agent's code", ok: original.ok, detail: testDetail(original) });
+
     const probe = await call(`node -e 'import("./src/greet.js").then((m) => { if (m.longForm("2s") !== "2 seconds" || m.longForm("1h") !== "1 hour") process.exit(1); console.log("longForm ok"); })'`);
-    add('longform', 'longForm("2s") returns "2 seconds" and longForm("1h") returns "1 hour"', probe.ok,
-      probe.ok ? 'both correct' : (probe.error ?? failureReason(probe.stderr, probe.stdout) ?? (tail(probe.stdout || probe.stderr, 2) || `exit ${probe.exitCode}`)));
+    add({ id: 'longform', label: 'longForm("2s") returns "2 seconds" and longForm("1h") returns "1 hour"', ok: probe.ok, detail: probe.ok ? 'both correct' : (probe.error ?? failureReason(probe.stderr, probe.stdout) ?? (tail(probe.stdout || probe.stderr, 2) || `exit ${probe.exitCode}`)) });
 
     const doc = await call('cat docs/longForm.md');
     const cited = [...new Set((String(doc.stdout).match(/https?:\/\/[^\s)>\]"'`]+/g) ?? []).map(normUrl))];
     const searches = calls.filter((c) => c.tool === 'search');
     const returned = new Set(searches.flatMap((c) => c.search?.results ?? []).map((r) => normUrl(r.url)));
     const matched = cited.filter((u) => returned.has(u));
-    add('cited', "docs/longForm.md cites a page the agent's own web search returned", matched.length > 0,
-      matched.length ? matched[0] : `searches made: ${searches.length}; URLs cited: ${cited.join(', ') || 'none'}`);
+    add({ id: 'cited', label: "docs/longForm.md cites a page the agent's own web search returned", ok: matched.length > 0, detail: matched.length ? matched[0] : `searches made: ${searches.length}; URLs cited: ${cited.join(', ') || 'none'}` });
   }
 
-  const s = accessSummary(calls);
-  add('inv-network', 'No call held the secrets together with network access', s.secretsWithNetwork === 0, `${s.secretsWithNetwork} of ${calls.length} calls`);
-  add('inv-write', 'No call held the secrets together with a writable folder', s.secretsWithWrite === 0, `${s.secretsWithWrite} of ${calls.length} calls`);
-  return { checks, archilCalls };
+  // Measured, not read from the policy table: what each class could actually do.
+  const classes = Object.keys(CLASSES);
+  send({ type: 'status', text: 'Measuring what each class could actually reach...' });
+  const rows = await probeClasses({ archil, base, classes, serviceUrl });
+  archilCalls += rows.length;
+  send({ type: 'measure', rows });
+  const j = judgeRows(rows);
+  for (const c of measuredChecks(j, rows.length)) add(c);
+  const leaked = calls.reduce((n, c) => n + (c.redactions ?? 0), 0);
+  add({ id: 'output', label: "The API key never appeared in any call's output", ok: leaked === 0, detail: `${leaked} occurrence(s) removed by the scrubber` });
+  const gap = dnsGap(j, rows.length);
+  if (gap) send({ type: 'gap', text: gap });
+  return { checks, archilCalls, judged: j };
 }
 
-export async function runSession({ archil, client, mode = 'live', taskId = 'longform', taskText, model = DEFAULT_MODEL, keep = false, emit = () => {}, tag = newTag(), region, logDir = DEFAULT_LOG_DIR, simulated = false }) {
+export function accessSummary(calls, refused = 0) {
+  const byClass = {};
+  for (const c of calls) byClass[c.class] = (byClass[c.class] ?? 0) + 1;
+  return { byClass, refused, redactions: calls.reduce((n, c) => n + (c.redactions ?? 0), 0) };
+}
+
+// Registers a fresh key for this run with the service, and returns the rule pieces.
+async function serviceForRun(service, tag) {
+  if (!service) return { rule: null, key: null, url: '' };
+  const key = newServiceKey();
+  await service.addKey(tag, key);
+  return { rule: { host: service.host, headers: { Authorization: `Bearer ${key}` } }, key, url: service.url };
+}
+
+export async function runSession({ archil, client, service, mode = 'live', taskId = 'longform', taskText, model = DEFAULT_MODEL, keep = false, emit = () => {}, tag = newTag(), region, logDir = DEFAULT_LOG_DIR, simulated = false }) {
   const rehearse = mode !== 'live';
   let task = taskId === 'custom' ? { id: 'custom', title: 'Custom task', text: String(taskText ?? '').trim(), checks: 'generic' } : TASKS[taskId];
   if (!task || !task.text) throw new Error(`unknown or empty task "${taskId}"`);
   if (rehearse) task = TASKS.longform; // the rehearsal script is written for this task
   const { file, send } = makeEmitter(tag, logDir, emit);
   // `pid` lets a restarted server tell a run that died from one still going elsewhere.
-  send({ type: 'start', kind: 'agent', id: tag, pid: process.pid, mode: rehearse ? 'rehearse' : 'live', simulated, model: rehearse ? null : model, task: { id: task.id, title: task.title, text: task.text }, region, image: IMAGE, log: path.basename(file) });
+  send({ type: 'start', kind: 'agent', id: tag, pid: process.pid, mode: rehearse ? 'rehearse' : 'live', simulated, model: rehearse ? null : model, task: { id: task.id, title: task.title, text: task.text }, region, image: IMAGE, service: service?.host ?? null, log: path.basename(file) });
 
-  let created = [];
+  const created = [];
+  let registered = false;
   const result = { ok: false, tag };
   try {
-    created = await makeDisks(archil, `scoped-agent-${tag}`, ['secrets', 'ws', 'web'], send);
-    const [secrets, workspace, web] = created;
-    const config = canaryConfig();
-    await secrets.putObject('config.json', JSON.stringify(config) + '\n');
+    if (!service) throw new Error("the project's service is not running, so the test class has nothing to reach");
+    await makeDisks(archil, `scoped-agent-${tag}`, ['ws', 'web'], send, created);
+    const [workspace, web] = created;
+    const svc = await serviceForRun(service, tag);
+    registered = true;
     const files = walk(path.join(here, 'sample-app'));
     for (const f of files) await workspace.putObject(f, readFileSync(path.join(here, 'sample-app', f)));
-    send({ type: 'status', text: `Project uploaded (${files.length} files). A throwaway canary secret is on the secrets disk.` });
+    await workspace.putObject('service.json', JSON.stringify({ url: svc.url }) + '\n');
+    send({ type: 'status', text: `Project uploaded (${files.length} files). A fresh API key for this run is registered with the service; it exists only in the host and in Archil's egress rule.` });
 
-    const base = { mode: 'limited', workspaceDisk: workspace, secretsDisk: secrets, webDisk: web, image: IMAGE, secretValues: [config.apiKey] };
+    const base = { mode: 'limited', workspaceDisk: workspace, webDisk: web, image: IMAGE, service: svc.rule, secretValues: [svc.key] };
     const started = Date.now();
-    const { calls, finalText, ended } = await runAgent({
+    const { calls, refused, finalText, ended } = await runAgent({
       client: rehearse ? rehearsalClient() : client,
       archil, base, task: task.text, model,
-      onCall: (c) => send(c.n === null ? { type: 'rejected', label: c.label, problem: c.problem } : { type: 'call', call: c }),
+      onCall: (c) => send(c.n === null ? { type: 'rejected', label: c.label, class: c.class, problem: c.problem, refused: !!c.refused } : { type: 'call', call: c }),
       onText: (t) => send({ type: 'say', turn: t.turn, text: t.text }),
     });
     const seconds = Math.round((Date.now() - started) / 1000);
-    send({ type: 'agent-done', ended, finalText, calls: calls.length, seconds });
+    send({ type: 'agent-done', ended, finalText, calls: calls.length, refused, seconds });
 
     send({ type: 'status', text: 'Checking the result independently...' });
-    const { checks, archilCalls } = await independentChecks({ archil, base, calls, task, send });
-    const summary = { ...accessSummary(calls), calls: calls.length, archilCalls: calls.length + archilCalls, seconds };
+    const { checks, archilCalls, judged } = await independentChecks({ archil, base, calls, task, serviceUrl: svc.url, send });
+    const summary = { ...accessSummary(calls, refused), calls: calls.length, archilCalls: calls.length + archilCalls, seconds, keyInside: judged.keyInside.length, dnsAnswered: judged.dnsAnswered.length };
     send({ type: 'summary', summary });
     Object.assign(result, { ok: checks.every((c) => c.ok), calls, checks, summary });
   } catch (e) {
     send({ type: 'error', text: describeError(e) });
   } finally {
+    if (registered) { try { await service.removeKey(tag); send({ type: 'status', text: "This run's API key was revoked." }); } catch (e) { send({ type: 'error', text: `could not revoke this run's key: ${describeError(e)}` }); } }
     await deleteDisks(created, keep, send);
     send({ type: 'end', ok: result.ok });
   }
   return result;
 }
 
-export async function runMatrix({ archil, keep = false, emit = () => {}, tag = newTag(), region, logDir = DEFAULT_LOG_DIR, simulated = false }) {
+export async function runMatrix({ archil, service, keep = false, emit = () => {}, tag = newTag(), region, logDir = DEFAULT_LOG_DIR, simulated = false }) {
   const { file, send } = makeEmitter(tag, logDir, emit);
   const order = [...Object.keys(CLASSES), 'open'];
-  send({ type: 'start', kind: 'matrix', id: tag, pid: process.pid, mode: 'live', simulated, region, image: IMAGE, classes: order, log: path.basename(file) });
+  send({ type: 'start', kind: 'matrix', id: tag, pid: process.pid, mode: 'live', simulated, region, image: IMAGE, classes: order, service: service?.host ?? null, log: path.basename(file) });
 
-  let created = [];
+  const created = [];
+  let registered = false;
   const result = { ok: false, tag, rows: [] };
   try {
-    created = await makeDisks(archil, `scoped-matrix-${tag}`, ['secrets', 'ws', 'web'], send);
-    const [secrets, workspace, web] = created;
-    const config = canaryConfig();
-    await secrets.putObject('config.json', JSON.stringify(config) + '\n');
-    const base = { workspaceDisk: workspace, secretsDisk: secrets, webDisk: web, image: IMAGE, secretValues: [config.apiKey] };
-    send({ type: 'status', text: 'One harmless probe per class: read the canary, write each folder, fetch an outside host.' });
+    if (!service) throw new Error("the project's service is not running");
+    await makeDisks(archil, `scoped-matrix-${tag}`, ['ws', 'web', 'key'], send, created);
+    const [workspace, web, keyDisk] = created;
+    const svc = await serviceForRun(service, tag);
+    registered = true;
+    // The no-limits baseline gets the key the way a conventional sandbox would: on hand.
+    await keyDisk.putObject('key.txt', svc.key);
+    const base = { workspaceDisk: workspace, webDisk: web, keyDisk, image: IMAGE, service: svc.rule, secretValues: [svc.key] };
+    send({ type: 'status', text: 'One harmless probe per class: look for the key, call the service, fetch an outside host, write each folder, resolve a name.' });
 
-    for (const name of order) {
-      const run = await runCall(archil, { ...base, mode: name === 'open' ? 'open' : 'limited', forcedClass: name === 'open' ? undefined : name, command: PROBE });
-      const p = parseProbe(run.stdout);
-      const row = {
-        class: name, grants: run.grants, measured: !!p,
-        secrets: p?.secrets ?? null, secretShown: p?.secretText ?? null, redactions: run.redactions ?? 0,
-        workspaceWrite: p?.workspaceWrite ?? null, webWrite: p?.webWrite ?? null, outside: p?.outside ?? null,
-        wallMs: run.wallMs, error: p ? null : (run.error ?? tail(run.stderr || run.stdout, 3)),
-      };
-      result.rows.push(row);
-      send({ type: 'matrix-row', row });
-    }
-
-    const rows = result.rows;
-    const limited = rows.filter((r) => r.class !== 'open');
-    const open = rows.find((r) => r.class === 'open');
-    const both = (r) => r.secrets === 'readable' && r.outside === 'reachable';
+    result.rows = await probeClasses({ archil, base, classes: order, serviceUrl: svc.url, onRow: (row) => send({ type: 'matrix-row', row }) });
+    const j = judgeRows(result.rows);
     const checks = [
-      { id: 'measured', label: 'Every probe ran and reported', ok: rows.every((r) => r.measured), detail: `${rows.filter((r) => r.measured).length} of ${rows.length}` },
-      { id: 'limited', label: 'Under limits, no class could read the secrets and reach an outside host', ok: limited.every((r) => !both(r)), detail: `${limited.filter(both).length} of ${limited.length} classes` },
-      { id: 'scrubbed', label: 'The secret value never came back to the host unredacted', ok: rows.every((r) => !String(r.secretShown ?? '').includes(config.apiKey)), detail: `${rows.reduce((n, r) => n + r.redactions, 0)} redaction(s)` },
-      { id: 'baseline', label: 'Without limits, the same probe could do both (the baseline)', ok: !!open && both(open), detail: open ? `secrets ${open.secrets}, outside ${open.outside}` : 'not measured' },
+      ...measuredChecks(j, result.rows.length),
+      { id: 'baseline', label: 'Without limits, the same probe held the key and could reach the service and the internet (the baseline)', ok: !!j.baseline && j.baseline.keyInside && j.baseline.service && j.baseline.outside, detail: j.baseline ? `key inside: ${j.baseline.keyInside}, service: ${j.baseline.service}, outside: ${j.baseline.outside}` : 'not measured' },
     ];
     for (const c of checks) send({ type: 'check', check: c });
+    const gap = dnsGap(j, result.rows.length);
+    if (gap) send({ type: 'gap', text: gap });
     result.ok = checks.every((c) => c.ok);
-    send({ type: 'summary', summary: { calls: rows.length, archilCalls: rows.length } });
+    send({ type: 'summary', summary: { calls: result.rows.length, archilCalls: result.rows.length, keyInside: j.keyInside.length, dnsAnswered: j.dnsAnswered.length } });
   } catch (e) {
     send({ type: 'error', text: describeError(e) });
   } finally {
+    if (registered) { try { await service.removeKey(tag); } catch (e) { send({ type: 'error', text: `could not revoke this run's key: ${describeError(e)}` }); } }
     await deleteDisks(created, keep, send);
     send({ type: 'end', ok: result.ok });
   }

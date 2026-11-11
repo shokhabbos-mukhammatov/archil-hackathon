@@ -11,7 +11,7 @@
     "agent": "node agent.mjs",
     "rehearse": "node agent.mjs --rehearse",
     "matrix": "node agent.mjs --matrix",
-    "demo": "node demo.mjs"
+    "service:stop": "node agent.mjs --stop-service"
   },
   "license": "ISC",
   "dependencies": {

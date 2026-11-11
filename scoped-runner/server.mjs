@@ -22,6 +22,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CLASSES, OPEN } from './policy.mjs';
 import { TASKS, DEFAULT_MODEL } from './loop.mjs';
 import { runSession, runMatrix, IMAGE, DEFAULT_LOG_DIR, describeError, newTag } from './session.mjs';
+import { startService } from './service.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MAX_ACTIVE = 3;
@@ -79,7 +80,7 @@ export function processAlive(pid) {
 // is still alive (a command-line run in progress, say) is left alone. Once cleaned, the run's
 // log gets a cleanup and an end event, so it is not considered again; if a deletion fails,
 // the next start tries again.
-export async function recoverInterrupted({ archil, runs, log = () => {}, now = Date.now() }) {
+export async function recoverInterrupted({ archil, runs, log = () => {}, now = Date.now(), service = null }) {
   const results = [];
   if (typeof archil?.disks?.list !== 'function') return results;
   let onAccount = null;
@@ -91,7 +92,10 @@ export async function recoverInterrupted({ archil, runs, log = () => {}, now = D
       results.push({ id: run.id, skipped: alive ? 'its process is still running' : 'recent, and its process is unknown' });
       continue;
     }
-    const ownName = new RegExp(`^scoped-(agent|matrix)-${run.id}-(secrets|ws|web)$`);
+    // The run's key may still be registered with the service: revoke it.
+    const svc = await service;
+    if (svc) { try { await svc.removeKey(run.id); } catch (e) { log(`Could not revoke the key of run ${run.id}: ${describeError(e)}`); } }
+    const ownName = new RegExp(`^scoped-(agent|matrix)-${run.id}-(secrets|ws|web|key)$`);
     const recorded = run.events.filter((e) => e.type === 'disks').flatMap((e) => e.names ?? []).filter((n) => ownName.test(n));
     const deleted = [];
     const failed = [];
@@ -116,15 +120,16 @@ export async function recoverInterrupted({ archil, runs, log = () => {}, now = D
   return results;
 }
 
-export async function startServer({ port = Number(process.env.PORT ?? 4317), host = '127.0.0.1', fake = false, logDir, quiet = false, archil: givenArchil = null } = {}) {
+export async function startServer({ port = Number(process.env.PORT ?? 4317), host = '127.0.0.1', fake = false, logDir, quiet = false, archil: givenArchil = null, service: givenService = null } = {}) {
   const region = process.env.ARCHIL_REGION ?? 'aws-us-west-2';
   logDir ??= fake ? path.join(DEFAULT_LOG_DIR, 'fake') : DEFAULT_LOG_DIR;
   const log = (...a) => { if (!quiet) console.log(...a); };
 
   let archil = givenArchil;
   let archilProblem = null;
+  let fakeSvc = null;
   if (archil) { /* supplied by the caller (tests) */ }
-  else if (fake) archil = (await import('./fake.mjs')).fakeArchil();
+  else if (fake) { const f = await import('./fake.mjs'); fakeSvc = f.fakeService(); archil = f.fakeArchil({ service: fakeSvc }); }
   else if (!process.env.ARCHIL_API_KEY) archilProblem = 'ARCHIL_API_KEY is not set. Add it to .env, or start with --fake.';
   else {
     try { const { Archil } = await import('disk'); archil = new Archil({ region }); } catch (e) { archilProblem = describeError(e); }
@@ -135,6 +140,16 @@ export async function startServer({ port = Number(process.env.PORT ?? 4317), hos
     if (!anthropic) { const { default: Anthropic } = await import('@anthropic-ai/sdk'); anthropic = new Anthropic(); }
     return anthropic;
   };
+
+  // The project's service: started once in the background and shared by every run.
+  let serviceProblem = null;
+  let serviceHost = null;
+  const servicePromise = givenService || fakeSvc
+    ? Promise.resolve(givenService ?? fakeSvc)
+    : archil
+      ? startService(archil, { log, image: IMAGE }).catch((e) => { serviceProblem = `The project's service could not start: ${describeError(e)}`; log(serviceProblem); return null; })
+      : Promise.resolve(null);
+  servicePromise.then((s) => { serviceHost = s?.host ?? null; });
 
   const runs = loadHistory(logDir);
   const page = () => readFileSync(path.join(here, 'public', 'index.html'));
@@ -174,10 +189,11 @@ export async function startServer({ port = Number(process.env.PORT ?? 4317), hos
     const run = { id: tag, events: [], listeners: new Set(), done: false };
     runs.set(tag, run);
     const emit = (ev) => push(run, ev);
-    const common = { archil, emit, tag, region, logDir, simulated: fake };
-    const job = kind === 'matrix'
-      ? runMatrix(common)
-      : (async () => runSession({ ...common, client: mode === 'live' && !fake ? await modelClient() : null, mode: fake ? 'rehearse' : mode, taskId, taskText, model: DEFAULT_MODEL }))();
+    const job = (async () => {
+      const common = { archil, emit, tag, region, logDir, simulated: fake, service: await servicePromise };
+      if (kind === 'matrix') return runMatrix(common);
+      return runSession({ ...common, client: mode === 'live' && !fake ? await modelClient() : null, mode: fake ? 'rehearse' : mode, taskId, taskText, model: DEFAULT_MODEL });
+    })();
     job.catch((e) => push(run, { type: 'error', text: describeError(e), at: Date.now() }))
       .finally(() => { if (!run.done) push(run, { type: 'end', ok: false, at: Date.now() }); log(`run ${tag} finished`); });
     log(`run ${tag} started: ${kind}, ${fake ? 'fake' : mode}`);
@@ -209,6 +225,7 @@ export async function startServer({ port = Number(process.env.PORT ?? 4317), hos
       return json(res, 200, {
         fake, region, image: IMAGE, model: DEFAULT_MODEL,
         archil: !!archil, archilProblem, modelKey: hasModelKey,
+        service: serviceHost, serviceProblem,
         tasks: Object.values(TASKS).map(({ id, title, text }) => ({ id, title, text })),
         classes: { ...CLASSES, open: OPEN },
         maxActive: MAX_ACTIVE,
@@ -244,8 +261,10 @@ export async function startServer({ port = Number(process.env.PORT ?? 4317), hos
   if (archilProblem) log(`Note: ${archilProblem}`);
   // In the background: clean up after runs that a previous server (or a killed command-line
   // run) left unfinished. Callers that need the outcome can await `recovery`.
-  const recovery = recoverInterrupted({ archil, runs, log }).catch((e) => { log(`Could not clean up interrupted runs: ${describeError(e)}`); return []; });
-  return { server, port: actualPort, recovery, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) };
+  const recovery = recoverInterrupted({ archil, runs, log, service: servicePromise }).catch((e) => { log(`Could not clean up interrupted runs: ${describeError(e)}`); return []; });
+  // The service sandbox is shared with other processes (the command line), so closing the
+  // server leaves it running; `node agent.mjs --stop-service` deletes it.
+  return { server, port: actualPort, recovery, service: servicePromise, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

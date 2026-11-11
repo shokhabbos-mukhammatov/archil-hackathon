@@ -1,33 +1,44 @@
 // Removes known secret values from text that comes back out of a call, before that text
-// reaches the model, a log file or the browser.
+// reaches the model, a log file or the browser, and spots them in text about to go out.
 //
-// Why it is needed: the test class can read the secrets (it has no network and nothing
-// writable, so it cannot send them anywhere itself). But whatever a test prints is returned
-// to the model, and the model could repeat it in a later call that does have network access.
-// Scrubbing closes that channel for the values the host knows about.
+// In this design the API key never enters a call (Archil adds it at the network edge), so
+// scrubbing is a second line of defence: it matters if a service ever echoes the key, or for
+// any secret a project does have to put inside a call.
 //
-// What it catches: the exact value, and its base64, base64url, hex, URL-encoded and
-// JSON-escaped forms. What it does not catch: a value that is split, reversed, or encoded
-// some other way. It narrows the channel; the per-call limits remain the main protection.
+// What it catches: the value in any letter case and reversed; its hex; its URL-encoded and
+// JSON-escaped forms; and its base64 or base64url at any byte alignment, so the value is
+// also caught when it sits inside a larger block that was base64-encoded as a whole (a
+// config file, say). What it cannot catch: a value split up, re-encoded some other way, or
+// encrypted. It narrows the channel; it does not close it.
 
 export const REDACTED = '[REDACTED]';
 export const MIN_SECRET_LENGTH = 8;
 
-export function variants(secret) {
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The base64 characters that depend only on the secret's own bytes, for each of the three
+// positions it can start at relative to base64's 3-byte groups. Whatever surrounds the
+// secret, one of these appears in the encoding of the whole.
+function base64Cores(bytes) {
+  const cores = [];
+  for (let k = 0; k < 3; k++) {
+    const enc = Buffer.concat([Buffer.alloc(k), bytes]).toString('base64');
+    const core = enc.slice(Math.ceil(k / 3) * 4, Math.floor((k + bytes.length) / 3) * 4);
+    cores.push(core, core.replace(/\+/g, '-').replace(/\//g, '_'));
+  }
+  return cores;
+}
+
+export function patternsFor(secret) {
   const s = String(secret);
-  const b = Buffer.from(s, 'utf8');
-  const forms = new Set([
-    s,
-    b.toString('base64'),
-    b.toString('base64').replace(/=+$/, ''),
-    b.toString('base64url'),
-    b.toString('hex'),
-    b.toString('hex').toUpperCase(),
-    encodeURIComponent(s),
-    JSON.stringify(s).slice(1, -1),
-  ]);
-  // Longest first, so a longer form is never left half-replaced by a shorter one.
-  return [...forms].filter((v) => v.length >= MIN_SECRET_LENGTH).sort((x, y) => y.length - x.length);
+  const bytes = Buffer.from(s, 'utf8');
+  const keep = (list) => [...new Set(list)].filter((v) => v.length >= MIN_SECRET_LENGTH).sort((x, y) => y.length - x.length);
+  return {
+    // Matched ignoring letter case.
+    anyCase: keep([s, [...s].reverse().join(''), bytes.toString('hex'), encodeURIComponent(s), JSON.stringify(s).slice(1, -1)]),
+    // base64 is case-sensitive.
+    exact: keep(base64Cores(bytes)),
+  };
 }
 
 // Returns the scrubbed text and how many occurrences were removed. Values shorter than
@@ -37,13 +48,13 @@ export function scrub(text, secrets = []) {
   let hits = 0;
   for (const secret of secrets) {
     if (secret == null || String(secret).length < MIN_SECRET_LENGTH) continue;
-    for (const form of variants(secret)) {
-      const parts = out.split(form);
-      if (parts.length > 1) {
-        hits += parts.length - 1;
-        out = parts.join(REDACTED);
-      }
+    const { anyCase, exact } = patternsFor(secret);
+    for (const [list, flags] of [[anyCase, 'gi'], [exact, 'g']]) {
+      if (!list.length) continue;
+      out = out.replace(new RegExp(list.map(escapeRe).join('|'), flags), () => { hits++; return REDACTED; });
     }
   }
   return { text: out, hits };
 }
+
+export const containsSecret = (text, secrets) => scrub(text, secrets).hits > 0;
